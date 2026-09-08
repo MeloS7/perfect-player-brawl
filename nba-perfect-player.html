@@ -3548,8 +3548,19 @@ function _showMaxRandomResult(info) {
     ? '<div style="font-size:11px;color:var(--gold);margin-bottom:6px;">⚙️ 为冲上目标，部分属性已放宽「跨位置衰减」（下方标 ⚡）</div>'
     : '';
 
-  var body = '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">' + head + '</div>' +
-    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">完整随机 ' + info.attempts + ' 次 · 累计刷新球队/球员 ' + info.rerolls + ' 次</div>' +
+  var draws = Number(info.rerolls || 0);
+  var drawsText = draws.toLocaleString('en-US');
+  var countLine =
+    '<div style="font-size:13px;font-weight:800;color:var(--orange);margin-bottom:2px;">' +
+      '🎲 本次共抽取 ' + drawsText + ' 次' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' +
+      '重刷 ' + info.attempts + ' 轮完整组建' +
+      (info.mode === 'detuned' ? ' · 含降配微调' : '') +
+    '</div>';
+
+  var body = '<div style="font-size:13px;font-weight:700;margin-bottom:6px;">' + head + '</div>' +
+    countLine +
     relaxNote +
     '<div style="font-size:11px;line-height:1.5;">' + rows + '</div>';
 
