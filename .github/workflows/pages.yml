@@ -1,0 +1,41 @@
+name: Deploy to GitHub Pages
+
+# 把仓库根目录作为静态站点直接发布到 GitHub Pages。
+# 入口是 index.html（会自动跳转到 nba-perfect-player.html）。
+# 需要在仓库 Settings → Pages 里把 Source 设为 "GitHub Actions"。
+
+on:
+  push:
+    branches: [brawl, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
