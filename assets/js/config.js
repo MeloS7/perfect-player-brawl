@@ -7,6 +7,41 @@
 const SIM_CONFIG = {
 
   // ============================================================
+  // 0. 大乱斗模式（Brawl）—— 历史球员大量涌入联盟
+  //    这些参数只有在 BRAWL.ENABLED 为 true 时才生效；
+  //    生涯模式（普通模式）下全部忽略。
+  // ============================================================
+  BRAWL: {
+    /** 是否启用大乱斗模式（由模式选择卡 / ?brawl=1 打开） */
+    ENABLED: false,
+
+    /** 每年休赛期新秀里，历史球员所占的比例（0~1）。0.6 = 约六成新秀是历史球星 */
+    ROOKIE_HISTORICAL_RATIO: 0.6,
+
+    /** 建球员阶段：历史惊喜卡出现概率（覆盖普通模式的 0.20） */
+    BUILD_HISTORICAL_DRAW_CHANCE: 0.75,
+
+    /** 允许同一个球员的不同时期版本同时存在于联盟里
+     *  （例：03 年的詹姆斯和 13 年的詹姆斯可以同队 / 同联盟并存） */
+    ALLOW_DUPLICATE_IDENTITIES: true,
+
+    /** 历史新秀的年龄取值：
+     *  'young'    —— 一律按新秀年龄（19~21），当成“重新出道”
+     *  'authentic'—— 尽量沿用历史卡自带的年龄 */
+    HISTORICAL_ROOKIE_AGE: 'young',
+
+    /** 在显示名后面追加时代后缀，如「勒布朗-詹姆斯·03」，方便区分不同版本 */
+    ERA_LABEL_SUFFIX: true,
+
+    /** 历史新秀 OVR 相对历史卡巅峰值的缩放（1 = 原样搬进联盟；0.92 = 略微削弱） */
+    HISTORICAL_OVR_SCALE: 1.0,
+
+    /** 历史新秀 OVR 上下限 */
+    HISTORICAL_OVR_MIN: 62,
+    HISTORICAL_OVR_MAX: 99,
+  },
+
+  // ============================================================
   // 1. 建球员阶段参数
   // ============================================================
   BUILD: {
@@ -332,6 +367,13 @@ const SIM_CONFIG = {
 };
 
 // 确保 SIM_CONFIG 全局可用
+
+// 浏览器：挂到 window，方便在控制台直接读改参数（例如 SIM_CONFIG.BRAWL.ROOKIE_HISTORICAL_RATIO = 0.9）
+if (typeof window !== 'undefined') {
+  window.SIM_CONFIG = SIM_CONFIG;
+}
+
+// Node.js（测试与工具）
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = SIM_CONFIG;
 }

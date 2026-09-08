@@ -1903,7 +1903,7 @@ function getPlayerHeadshotStyle(playerName, displaySize) {
 <script src="assets/js/hupu/script-02-2678-gd4jvxrc-upload-1783494754597-15.js"></script>
 <script src="assets/js/hupu/script-03-2678-456sfprc-upload-1783494754597-18.js"></script>
 <script src="assets/js/hupu/script-04-2678-mdo4zerc-upload-1783494754597-21.js"></script>
-<script src="assets/js/hupu/script-05-2678-qlg35lrc-upload-1783494754597-24.js"></script>
+<script src="assets/js/config.js"></script>
 <script>
 // ── 中文名修正 ──
 (function fixPlayerCN() {
@@ -2726,6 +2726,10 @@ function renderModeSelect() {
   container.innerHTML = '';
   
   // 保留虎扑原模式卡布局，只移除未实现的传奇占位模式。
+  var _brawlParam = false;
+  try { _brawlParam = /[?&]brawl=1\b/.test(location.search); } catch (e) {}
+  if (_brawlParam && typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.BRAWL) SIM_CONFIG.BRAWL.ENABLED = true;
+
   const cards = [
     {
       tag: 'Current',
@@ -2735,8 +2739,16 @@ function renderModeSelect() {
       btnLabel: '🎮 进入活动',
       mode: 'current',
     },
+    {
+      tag: 'Brawl',
+      tagClass: 'gold',
+      title: '大乱斗模式',
+      sub: '每年新秀里大量涌入历史球星，不同时代版本同场竞技',
+      btnLabel: '🔥 进入大乱斗',
+      mode: 'brawl',
+    },
   ];
-  
+
   cards.forEach((c) => {
     const card = document.createElement('div');
     card.className = 'feature-card';
@@ -2749,7 +2761,7 @@ function renderModeSelect() {
       <button class="fc-btn" ${c.disabled ? 'disabled' : ''}>
         ${c.btnLabel}
       </button>
-      
+
     `;
     const btn = card.querySelector('.fc-btn');
     if (!c.disabled) {
@@ -2760,7 +2772,12 @@ function renderModeSelect() {
           showDownloadModal();
           return;
         }
-        STATE.mode = c.mode;
+        if (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.BRAWL) {
+          SIM_CONFIG.BRAWL.ENABLED = (c.mode === 'brawl') || _brawlParam;
+        }
+        STATE._brawl = (c.mode === 'brawl') || _brawlParam;
+        // brawl 复用 current 的建球员 / 赛季流程，仅由 SIM_CONFIG.BRAWL 控制内容
+        STATE.mode = 'current';
         startGame();
       };
     }
@@ -3138,7 +3155,17 @@ function getBuildHistoricalSurprisePool(team) {
 }
 
 // 历史球员是低概率惊喜卡，不再像普通候选一样每轮固定出现。
-const HISTORICAL_SURPRISE_DRAW_CHANCE = 0.20;
+// 大乱斗模式下改读 SIM_CONFIG.BRAWL.BUILD_HISTORICAL_DRAW_CHANCE。
+const HISTORICAL_SURPRISE_DRAW_CHANCE_DEFAULT = 0.20;
+function getHistoricalSurpriseDrawChance() {
+  var b = (typeof SIM_CONFIG !== 'undefined') && SIM_CONFIG.BRAWL;
+  if (b && b.ENABLED && typeof b.BUILD_HISTORICAL_DRAW_CHANCE === 'number') {
+    return Math.max(0, Math.min(1, b.BUILD_HISTORICAL_DRAW_CHANCE));
+  }
+  return HISTORICAL_SURPRISE_DRAW_CHANCE_DEFAULT;
+}
+// 兼容旧引用
+const HISTORICAL_SURPRISE_DRAW_CHANCE = HISTORICAL_SURPRISE_DRAW_CHANCE_DEFAULT;
 
 /** 从12名现役池抽一轮固定5张卡；最多插入1张巅峰惊喜卡。巅峰版与现役版视为不同卡。 */
 function drawBuildPlayers(pool, count, team) {
@@ -3146,7 +3173,7 @@ function drawBuildPlayers(pool, count, team) {
   const targetCount = Math.min(count || 5, source.length);
   const shuffled = shuffleArr(source.slice());
   const historical = shuffleArr(getBuildHistoricalSurprisePool(team).filter(Boolean));
-  if (historical.length && targetCount >= 1 && Math.random() < HISTORICAL_SURPRISE_DRAW_CHANCE) {
+  if (historical.length && targetCount >= 1 && Math.random() < getHistoricalSurpriseDrawChance()) {
     const currentCards = shuffled.slice(0, Math.max(0, targetCount - 1));
     const historicalCard = historical[0];
     return shuffleArr(currentCards.concat(historicalCard));
@@ -19727,7 +19754,109 @@ var ROOKIE_CANDIDATES = DRAFT_CLASS_2027
   .concat(ROOKIE_NAMES.map(function(x, i) { return { en: x.en, cn: x.cn, pick: i + 1 }; }))
   .filter(function(x) { return !_starRookieKeys[x.en]; });
 
+// ==================== 大乱斗：历史球员新秀池 ====================
+// 数据源复用建球员阶段已转换好的历史惊喜卡（13 项属性 + OVR + 头像齐全）。
+var _brawlHistoricalBag = [];
+
+function getBrawlConfig() {
+  return (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.BRAWL) ? SIM_CONFIG.BRAWL : null;
+}
+
+function collectBrawlHistoricalPool() {
+  var map = window.PERFECT_PLAYER_HISTORICAL_SURPRISE_DATA || {};
+  var all = [];
+  Object.keys(map).forEach(function(abbr) {
+    (map[abbr] || []).forEach(function(card) {
+      if (card && card._sourceKind === 'historical') all.push(card);
+    });
+  });
+  return all;
+}
+
+/** 从历史池里取一张卡；取完后重新洗牌再来一轮 —— 因此同一个球员/同一时期
+ *  可以在不同年份、不同球队反复出现（正是“大乱斗”想要的效果）。 */
+function drawBrawlHistoricalCard() {
+  var b = getBrawlConfig();
+  if (!b || !b.ENABLED) return null;
+  if (!_brawlHistoricalBag.length) {
+    var pool = collectBrawlHistoricalPool();
+    if (!pool.length) return null;
+    _brawlHistoricalBag = shuffleArr(pool.slice());
+  }
+  return _brawlHistoricalBag.pop() || null;
+}
+
+// 巅峰表里大部分卡的 _sourceLabel 是 "1957-58" 这种打包产物，不是真实时代，过滤掉。
+function brawlEraLabel(card) {
+  var label = String(card._sourceLabel || '');
+  var m = label.match(/^(\d{4})-\d{2}$/);
+  if (m && Number(m[1]) >= 1960) return label;
+  var y = Number(card._sourceYear || 0);
+  if (y >= 1960 && y <= 2100) return String(y) + '-' + String((y + 1) % 100).padStart(2, '0');
+  return '';
+}
+
+function brawlEraSuffix(card) {
+  var b = getBrawlConfig();
+  if (!b || !b.ERA_LABEL_SUFFIX) return '';
+  var label = brawlEraLabel(card);
+  return label ? '·' + label.slice(2, 4) + '版' : '';
+}
+
+/** 把一张历史惊喜卡包装成联盟新秀对象（形状与 generateRookie 返回值一致）。 */
+function makeHistoricalRookie(card) {
+  var b = getBrawlConfig() || {};
+  var mainPos = (typeof getPlayerMainPos === 'function' ? getPlayerMainPos(card) : null) || 'SF';
+  var scale = Number(b.HISTORICAL_OVR_SCALE) || 1;
+  var lo = Number(b.HISTORICAL_OVR_MIN) || 55;
+  var hi = Number(b.HISTORICAL_OVR_MAX) || 99;
+  var baseOvr = Number(card.ovr) || 75;
+  var ovr = Math.max(lo, Math.min(hi, Math.round(baseOvr * scale)));
+  var ratio = baseOvr > 0 ? ovr / baseOvr : 1;
+
+  var age;
+  if (b.HISTORICAL_ROOKIE_AGE === 'authentic') {
+    age = ovr >= 90 ? 27 : ovr >= 82 ? 25 : ovr >= 74 ? 23 : 22;
+  } else {
+    age = 19 + Math.floor(rngNext() * 3);
+  }
+
+  var suffix = brawlEraSuffix(card);
+  var p = {
+    name: 'HistRookie_' + (++_rookieNameSeq),
+    nameEN: card.name || card.nameEN || '',
+    cname: (card.cname || card.name || '历史球员') + suffix,
+    pos: mainPos,
+    height: card.height || '6\'7"',
+    type: '新秀',
+    ovr: ovr,
+    _age: age,
+    _enterYear: 2026 + ((STATE.career && STATE.career.seasonCount) || 0),
+    _sourceKind: 'historical',
+    _historicalTier: card._historicalTier || '',
+    _brawlHistoricalRookie: true,
+    _brawlEra: brawlEraLabel(card),
+    photoLocal: card._photoLocal || card.photoLocal || nextGeneratedRookiePortrait(),
+    photoUrl: card._photoUrl || card.photoUrl || '',
+    photoStatus: 'cached',
+    photoSource: 'brawl-historical',
+  };
+  var attrKeys = SIM_CONFIG.ATTR_LIST || ['threePT','MID','FIN','DNK','HAN','PAS','PDEF','IDEF','BLK','REB','ATH','STR','CLU'];
+  attrKeys.forEach(function(k) {
+    var v = Number(card[k]);
+    if (!isFinite(v)) v = ovr;
+    p[k] = Math.max(25, Math.min(99, Math.round(v * ratio)));
+  });
+  return p;
+}
+
 function generateRookie() {
+  // 大乱斗：按比例把这名新秀替换成历史球员
+  var _b = getBrawlConfig();
+  if (_b && _b.ENABLED && rngNext() < (Number(_b.ROOKIE_HISTORICAL_RATIO) || 0)) {
+    var _card = drawBrawlHistoricalCard();
+    if (_card) return makeHistoricalRookie(_card);
+  }
   var allPos = ['PG','SG','SF','PF','C'];
   var pos = allPos[Math.floor(rngNext() * allPos.length)];
   var available = ROOKIE_CANDIDATES.filter(function(x) { return !_usedRookieCandidateNames[x.en]; });
