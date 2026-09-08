@@ -2503,12 +2503,32 @@ function getGrade(val) { return GRADE.getGrade(val); }
 function getOvrGrade(ovr) { return GRADE.getOvrGrade(ovr); }
 
 // ==================== 跨位置衰减 ====================
-/** 计算跨位置衰减系数：你建的位置 vs 来源球员位置 */
+/** 自建球员的位置列表（1~2 个）：[主] 或 [主, 副] */
+function getUserPositions() {
+  var list = [];
+  if (STATE.position && SIM_CONFIG.POS_AVG[STATE.position]) list.push(STATE.position);
+  if (STATE.position2 && SIM_CONFIG.POS_AVG[STATE.position2] && STATE.position2 !== STATE.position) list.push(STATE.position2);
+  return list.length ? list : ['SF'];
+}
+
+/** 计算跨位置衰减系数：你建的位置 vs 来源球员位置。
+ *  userPos 可以是单个位置字符串、"PG / SG" 这种斜杠串，或数组；
+ *  多位置时取衰减最小（对玩家最有利）的一个。 */
 function getPosPenalty(userPos, srcPos, attrKey) {
   const srcAvg = SIM_CONFIG.POS_AVG[srcPos] && SIM_CONFIG.POS_AVG[srcPos][attrKey];
-  const userAvg = SIM_CONFIG.POS_AVG[userPos] && SIM_CONFIG.POS_AVG[userPos][attrKey];
   if (!srcAvg || srcAvg <= 0) return 1.0;
-  return Math.min(1.0, userAvg / srcAvg);
+  var list;
+  if (Array.isArray(userPos)) list = userPos;
+  else if (typeof userPos === 'string' && userPos.indexOf('/') >= 0) list = userPos.split('/').map(function(s){ return s.trim(); });
+  else list = [userPos];
+  var best = 0;
+  for (var i = 0; i < list.length; i++) {
+    var ua = SIM_CONFIG.POS_AVG[list[i]] && SIM_CONFIG.POS_AVG[list[i]][attrKey];
+    if (ua == null) continue;
+    var pen = Math.min(1.0, ua / srcAvg);
+    if (pen > best) best = pen;
+  }
+  return best > 0 ? best : 1.0;
 }
 
 /** 从球员的 pos 字段提取主位置（'PG / SG' → 'PG'） */
@@ -2618,7 +2638,7 @@ function initGame() {
   _rookieNameSeq = 0;
   // 重置状态（保留 gameId 持久不变，直到下一次显式重置）
   Object.assign(STATE, {
-    mode: null, position: null,
+    mode: null, position: null, position2: null,
     attrs: {}, attrSlots: {}, lockedCount: 0,
     usedPlayers: [], _mustLockAfterSpin: false,
     buildStep: 'select', noPlayerSelected: true,
@@ -2806,25 +2826,55 @@ async function startGame() {
 }
 
 // ==================== 2. 位置选择 ====================
+function _selectedPositions() {
+  var sel = [];
+  if (STATE.position) sel.push(STATE.position);
+  if (STATE.position2 && STATE.position2 !== STATE.position) sel.push(STATE.position2);
+  return sel;
+}
+
+function togglePositionSelect(pos) {
+  var sel = _selectedPositions();
+  var i = sel.indexOf(pos);
+  if (i >= 0) sel.splice(i, 1);        // 再点一次 = 取消
+  else if (sel.length < 2) sel.push(pos);
+  else sel[1] = pos;                    // 已选 2 个 → 替换副位置
+  STATE.position = sel[0] || null;
+  STATE.position2 = sel[1] || null;
+  renderPositionSelect();
+}
+
 function renderPositionSelect() {
   const grid = html('pos-grid');
   grid.innerHTML = '';
-  
+
+  var sub = document.querySelector('#screen-position .sub');
+  if (sub) sub.textContent = '现役模式 · 可选 1~2 个位置（双位置能大幅降低跨位置属性损失）';
+
   const icons = { PG: '🎯', SG: '🔥', SF: '🏃', PF: '💪', C: '🧱' };
+  var sel = _selectedPositions();
   SIM_CONFIG.POS_LIST.forEach(pos => {
     const card = document.createElement('div');
     card.className = 'pos-card';
+    var idx = sel.indexOf(pos);
+    if (idx >= 0) card.classList.add('selected');
+    var badge = idx === 0 ? '<span style="font-size:10px;color:var(--orange);font-weight:700;"> · 主</span>'
+              : idx === 1 ? '<span style="font-size:10px;color:var(--gold);font-weight:700;"> · 副</span>' : '';
     card.innerHTML = `
-      <div class="pos-label">${SIM_CONFIG.POSITIONS[pos]}</div>
+      <div class="pos-label">${SIM_CONFIG.POSITIONS[pos]}${badge}</div>
       <div class="pos-en">${icons[pos] || ''} ${pos}</div>
     `;
-    card.onclick = () => {
-      $$('.pos-card').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-      STATE.position = pos;
-    };
+    card.onclick = () => togglePositionSelect(pos);
     grid.appendChild(card);
   });
+}
+
+/** 显示用：主位置 或 “主 / 副” */
+function getUserPositionLabel(withCn) {
+  var sel = _selectedPositions();
+  if (!sel.length) return '';
+  if (withCn) return sel.map(function(p) { return SIM_CONFIG.POSITIONS[p] || p; }).join(' / ');
+  return sel.join(' / ');
 }
 
 function confirmPosition() {
@@ -2842,7 +2892,7 @@ function confirmPosition() {
 
 function renderBuildUI() {
   var pi = document.getElementById('build-pos-indicator');
-  if (pi) pi.textContent = '我选择的位置：' + (SIM_CONFIG.POSITIONS[STATE.position] || STATE.position) + '（' + STATE.position + '）';
+  if (pi) pi.textContent = '我选择的位置：' + getUserPositionLabel(true) + '（' + getUserPositionLabel(false) + '）';
   renderLeftAttrs();
   renderProgress();
 }
@@ -2924,7 +2974,7 @@ function renderLeftAttrs() {
       const pv = parseInt(STATE.selectedPlayer[key]) || 50;
       // 计算跨位置衰减后的值
       const playerPos = getPlayerMainPos(STATE.selectedPlayer);
-      const penalty = getPosPenalty(STATE.position, playerPos, key);
+      const penalty = getPosPenalty(getUserPositions(), playerPos, key);
       const adjustedVal = Math.round(pv * penalty);
       const hasPenalty = penalty < 1.0;
       const pg = getGrade(adjustedVal);
@@ -3437,7 +3487,8 @@ function _runMaxRandom(TARGET_OVR) {
   var teamList = Object.keys(byTeam);
   if (!teamList.length) { alert('球员池还没加载完，请稍等两秒再试'); return; }
 
-  var pos = STATE.position;
+  var pos = STATE.position;                 // 主位置：用于 calcOVR / 权重
+  var userPositions = getUserPositions();   // 1~2 个位置：用于跨位置衰减（取最有利）
 
   // ============ 阶段 A：贪心冲到能达到的最高总评 ============
   var best = null;      // { ovr, pickByKey, penaltyFloor }
@@ -3463,7 +3514,7 @@ function _runMaxRandom(TARGET_OVR) {
           var p = draw[i];
           var raw = parseInt(p[key]) || 50;
           var srcPos = getPlayerMainPos(p);
-          var naturalPenalty = getPosPenalty(pos, srcPos, key);
+          var naturalPenalty = getPosPenalty(userPositions, srcPos, key);
           var penalty = Math.max(naturalPenalty, penaltyFloor);
           var adj = Math.min(99, Math.round(raw * penalty));
           if (!bestForKey || adj > bestForKey.adj) {
@@ -3510,7 +3561,7 @@ function _runMaxRandom(TARGET_OVR) {
     ATTR_KEYS.forEach(function(key) {
       var wantVal = Math.max(25, Math.min(99, Math.round(baseAttrs[key] - r)));
       totalRerolls += DETUNE_DRAWS;
-      var found = _searchAttrValue(byTeam, teamList, pos, key, wantVal, DETUNE_DRAWS);
+      var found = _searchAttrValue(byTeam, teamList, userPositions, key, wantVal, DETUNE_DRAWS);
       detunePicks[key] = found || best.pickByKey[key];
     });
   }
@@ -3614,7 +3665,7 @@ function lockAttr(key) {
   
   // 跨位置衰减计算
   const playerPos = getPlayerMainPos(player);
-  const penalty = getPosPenalty(STATE.position, playerPos, key);
+  const penalty = getPosPenalty(getUserPositions(), playerPos, key);
   const adjustedVal = Math.round(rawVal * penalty);
   
   STATE.attrs[key] = adjustedVal;
@@ -3881,7 +3932,8 @@ function getArchCategoryCN(category) {
 function revealPlayer() {
   STATE.finalOVR = calcOVR(STATE.attrs, STATE.position);
   STATE.finalPosition = STATE.position;
-  
+  STATE.finalPosition2 = STATE.position2 || null;
+
   showScreen('screen-reveal');
 
   // ★ Archetype 匹配 → 仅展示最终模板
@@ -3937,7 +3989,7 @@ function revealPlayer() {
         <div class="rv-item" style="animation-delay:0.1s"><div class="reveal-label">我的球员</div></div>
          <div class="rv-item" style="animation-delay:0.2s"><div class="big-cname">${getHupuDisplayName()}</div></div>
         <div class="rv-ovr" style="animation-delay:0.3s"><div class="big-ovr">${STATE.finalOVR}</div></div>
-        <div class="rv-item" style="animation-delay:0.4s"><div class="big-pos">${SIM_CONFIG.POSITIONS[STATE.position]}</div></div>
+        <div class="rv-item" style="animation-delay:0.4s"><div class="big-pos">${getUserPositionLabel(true)}</div></div>
       </div>
     </div>
     <div class="reveal-stats">${statsHtmlWithDelay}</div>
@@ -19313,6 +19365,18 @@ function randomContractByAge(age) {
   return 1;
 }
 
+/** 球队强度：roster 里 OVR 最高的前 N 人平均值 */
+function getFaTeamStrength(t) {
+  var cfg = (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.FREE_AGENCY) || {};
+  var ratings = (NBA2K_DATA[t] || []).map(function(p) { return Number(p.ovr) || 0; })
+    .sort(function(a, b) { return b - a; });
+  if (!ratings.length) return 75;
+  var n = Math.max(1, Math.min(ratings.length, Number(cfg.TEAM_STRENGTH_TOP_N) || 9));
+  var sum = 0;
+  for (var i = 0; i < n; i++) sum += ratings[i] || 0;
+  return sum / n;
+}
+
 function assignFreeAgents() {
   var pool = STATE._freeAgentPool || [];
   if (pool.length === 0) return;
@@ -19322,6 +19386,9 @@ function assignFreeAgents() {
 
   console.log('[FA] 自由球员分配:', pool.length, '人');
 
+  var faCfg = (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.FREE_AGENCY) || {};
+  var affinityOn = faCfg.ENABLED !== false;
+
   pool.sort(function(a, b) { return b.ovr - a.ovr; });
   var st = STATE._prevStandings;
   var teams = NBA2K_TEAMS.slice().sort(function(a, b) {
@@ -19330,33 +19397,80 @@ function assignFreeAgents() {
     return (aw + al > 0 ? aw / (aw + al) : 0.5) - (bw + bl > 0 ? bw / (bw + bl) : 0.5);
   });
 
+  // 各队强度 + 联盟均值（供“强队更吸引强援”用）
+  var strengthByTeam = {};
+  var strSum = 0;
+  NBA2K_TEAMS.forEach(function(t) { var s = getFaTeamStrength(t); strengthByTeam[t] = s; strSum += s; });
+  var leagueAvgStrength = NBA2K_TEAMS.length ? strSum / NBA2K_TEAMS.length : 78;
+
+  // fa 对球队 t 的加盟意向分（越高越想去）
+  function faAffinity(fa, t) {
+    var rel = (strengthByTeam[t] != null ? strengthByTeam[t] : leagueAvgStrength) - leagueAvgStrength;
+    var faStrength = Math.max(0, Math.min(1.6, (fa.ovr - 74) / 14)); // 0@74 ~1@88 1.6@96+
+    var w = Number(faCfg.AFFINITY_WEIGHT) || 0.9;
+    var s = rel * w * (0.7 + faStrength);              // 人人都更想去强队，强援更甚
+    s += (1 - Math.min(1, faStrength)) * (-rel) * 0.15; // 边缘球员被弱队的空位轻微吸引
+    s += (rngNext() - 0.5) * 2 * (Number(faCfg.RANDOM_JITTER) || 4);
+    return s;
+  }
+
+  // fa 是否会“看不上”球队 t（太弱的强援直接拒绝）
+  function faRejectsTeam(fa, t) {
+    if (!affinityOn) return false;
+    if (fa.ovr < (Number(faCfg.STAR_OVR) || 86)) return false;
+    var rel = (strengthByTeam[t] != null ? strengthByTeam[t] : leagueAvgStrength) - leagueAvgStrength;
+    if (rel >= -(Number(faCfg.STAR_REJECT_GAP) || 3.5)) return false;
+    return rngNext() < (Number(faCfg.STAR_REJECT_CHANCE) || 0.8);
+  }
+
   // 本轮自由市场已签约 OVR ≥ 86 的球队（防扎堆）
   var starSignedTeams = {};
 
   pool.forEach(function(fa) {
     if (!fa._origTeam) console.log('[FA] 无_origTeam:', (fa.cname||fa.name), 'ovr:', fa.ovr);
     var pos = (fa.pos || 'SF').split('/')[0].trim();
-    for (var ti = 0; ti < teams.length; ti++) {
-      var t = teams[ti];
+    // 按“加盟意向”给球队排序（强队排前面，强援尤其偏向强队）
+    var orderedTeams = affinityOn
+      ? teams.slice().sort(function(a, b) { return faAffinity(fa, b) - faAffinity(fa, a); })
+      : teams;
+    for (var ti = 0; ti < orderedTeams.length; ti++) {
+      var t = orderedTeams[ti];
       if (t === fa._origTeam) { console.log('[FA] 跳过回原队:', (fa.cname||fa.name), fa._origTeam); continue; }
-      if (fa.ovr > 86) {
-        if (starSignedTeams[t]) { console.log('[FA] 该队已签球星，跳过:', (fa.cname||fa.name), t); continue; }
-        var hasStar = false;
-        (NBA2K_DATA[t] || []).forEach(function(p) {
-          if (p !== fa && !p._isUser && canPlayPosition(p.pos || '', pos) && p.ovr >= 84) hasStar = true;
-        });
-        if (hasStar) continue;
-      }
+      if (faRejectsTeam(fa, t)) { continue; }
+
       var roster = NBA2K_DATA[t];
       if (!roster || roster.length >= 18) continue;
       var posCount = 0;
       roster.forEach(function(p) {
         if (canPlayPosition(p.pos || '', pos)) posCount++;
       });
-      if (posCount < 2) {
+
+      var isStarFA = fa.ovr > 86;
+      var relT = (strengthByTeam[t] != null ? strengthByTeam[t] : leagueAvgStrength) - leagueAvgStrength;
+      var willSign = false;
+
+      if (isStarFA) {
+        if (starSignedTeams[t]) { continue; }          // 每队每年最多签 1 名强援
+        if (affinityOn) {
+          // 强援愿意加盟：强队随便去（哪怕位置已经很满 = 抱团）；
+          // 平均及以下的队，只有该位置人手不足时才愿意去。
+          willSign = (relT >= 0) || (posCount < 3);
+        } else {
+          // 原版：该位置没有 84+ 且人手不足才签
+          var hasStar = false;
+          (NBA2K_DATA[t] || []).forEach(function(p) {
+            if (p !== fa && !p._isUser && canPlayPosition(p.pos || '', pos) && p.ovr >= 84) hasStar = true;
+          });
+          willSign = !hasStar && posCount < 2;
+        }
+      } else {
+        willSign = posCount < 2;
+      }
+
+      if (willSign) {
         roster.push(fa);
         fa._justSigned = true;
-        if (fa.ovr > 86) starSignedTeams[t] = true;
+        if (isStarFA) starSignedTeams[t] = true;
         STATE._leagueChanges.freeSignings.push({ name: fa.cname || fa.name, nameEN: fa.name, from: fa._origTeam, to: t, ovr: fa.ovr });
         if (t === STATE.careerTeam) {
           if (!STATE._leagueChanges.teamChanges) STATE._leagueChanges.teamChanges = {};
@@ -19366,9 +19480,9 @@ function assignFreeAgents() {
         return;
       }
     }
-    // fallback
-    for (var fi = 0; fi < teams.length; fi++) {
-      var fb = teams[fi];
+    // fallback（最后兜底：仍按加盟意向排序，但不再拒绝任何球队）
+    for (var fi = 0; fi < orderedTeams.length; fi++) {
+      var fb = orderedTeams[fi];
       if (fb === fa._origTeam) { console.log('[FA] fallback跳过回原队:', (fa.cname||fa.name), fa._origTeam); continue; }
       if (fa.ovr > 86) {
         if (starSignedTeams[fb]) continue;
