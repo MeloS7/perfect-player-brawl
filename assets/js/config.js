@@ -65,6 +65,16 @@ const SIM_CONFIG = {
       SCORE_VARIANCE_BASE: 5.0,
       SCORE_VARIANCE_MIN: 3.6,
       SCORE_VARIANCE_MAX: 8.5,
+
+      // ---- (5) 压平高能力球员的个人产量（原版曲线太陡：92 OVR 能砍 36 分）----
+      /** 球权占比曲线系数（原 0.27，越小顶级球员球权越低） */
+      USAGE_CURVE: 0.235,
+      /** 球权占比上限（原 0.39） */
+      USAGE_CAP: 0.30,
+      /** 投篮积极性斜率（原 0.004） */
+      AGGRO_SLOPE: 0.0024,
+      /** 单场出手上限（原 32） */
+      FGA_CAP: 23,
     },
   },
 

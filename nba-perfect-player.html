@@ -5074,6 +5074,7 @@ function startSeason() {
     '</div>' +
     (typeof renderPlayerStateStrip === 'function' ? renderPlayerStateStrip() : '') +
     renderEventStatus() +
+    simSideControlsHtml() +
     '<div class="dot-grid" id="simDotGrid">' +
       '<div style="display:flex;align-items:center;justify-content:center;width:100%;min-height:120px;">' +
         '<div class="loading-balls"><span class="loading-ball"></span><span class="loading-ball"></span><span class="loading-ball"></span></div>' +
@@ -5103,6 +5104,13 @@ function quickSimAllGames() {
 
   var gi = 0;
   function simNextWithDelay() {
+    // 赛季中暂停：轮询等待，其间可打开「联盟」面板查看排名 / 阵容 / 数据
+    if (window._simPaused && gi < games.length) {
+      var _ps = document.getElementById('simStatus');
+      if (_ps) _ps.textContent = '⏸ 已暂停 ' + gi + '/' + games.length + ' · 点「▶ 继续」恢复';
+      setTimeout(simNextWithDelay, 250);
+      return;
+    }
     if (gi >= games.length) {
       processAllRemainingDays();
       reconcileStandings();
@@ -5356,12 +5364,14 @@ function quickSimAllGames() {
         try { branchEv = checkSeasonBranchEvent(g, result, stats); } catch(ex) {}
       }
 
-      // 更新当前 dot
+      // 更新当前 dot（点击可查看该场完整 box score）
       var dotEl = document.getElementById('gdot-' + gi);
       if (dotEl) {
         dotEl.className = 'dot ' + (result.won ? 'dot-w' : 'dot-l');
         dotEl.style.animation = 'popIn .3s ease';
-        dotEl.title = 'G' + (gi + 1) + ': ' + (result.won ? '胜' : '负') + ' ' + getTeamName(g.opponent) + ' ' + (result.scoreA || '') + '-' + (result.scoreB || '');
+        dotEl.style.cursor = 'pointer';
+        dotEl.title = 'G' + (gi + 1) + ': ' + (result.won ? '胜' : '负') + ' ' + getTeamName(g.opponent) + ' ' + (result.scoreA || '') + '-' + (result.scoreB || '') + '（点击看技术统计）';
+        dotEl.onclick = (function(day) { return function() { showGamePopup(day); }; })(g.day);
       }
 
       // 更新战绩
@@ -6163,7 +6173,7 @@ function renderDotGrid() {
       if (g.suspended) {
         dotsHtml += '<span class="dot dot-x" title="G' + (i + 1) + ': 禁赛">✕</span>';
       } else {
-        dotsHtml += '<span class="dot ' + (g.result.won ? 'dot-w' : 'dot-l') + '" title="G' + (i + 1) + ': ' + (g.result.won ? '胜' : '负') + ' ' + getTeamName(g.game.opponent) + ' ' + (g.result.scoreA || '') + '-' + (g.result.scoreB || '') + '"></span>';
+        dotsHtml += '<span class="dot ' + (g.result.won ? 'dot-w' : 'dot-l') + '" style="cursor:pointer;" onclick="showGamePopup(' + g.game.day + ')" title="G' + (i + 1) + ': ' + (g.result.won ? '胜' : '负') + ' ' + getTeamName(g.game.opponent) + ' ' + (g.result.scoreA || '') + '-' + (g.result.scoreB || '') + '（点击看技术统计）"></span>';
       }
       if ((i + 1) % 14 === 0) dotsHtml += '<br>';
     });
@@ -6185,6 +6195,7 @@ function renderDotGrid() {
       '<span>' + (function(){ var ps=STATE.season.playerStats,g=ps.games||1; return '场均 ' + Math.round(ps.pts/g*10)/10 + '分 ' + Math.round(ps.reb/g*10)/10 + '板 ' + Math.round(ps.ast/g*10)/10 + '助'; })() + '</span>' +
     '</div>' +
     renderEventStatus() +
+    simSideControlsHtml() +
     '<div class="dot-grid">' + dotsHtml + '</div>' +
     '<div style="text-align:center;padding:0 12px 16px;">' + actionBtn + '</div>';
   } catch(e) { console.error('[Grid] renderDotGrid 异常:', e); }
@@ -6957,6 +6968,9 @@ function generatePlayerStatsNew(attrs, gameResult, isPlayoff) {
     syncUserStatsIntoBoxScore(gameResult, gameResult._userLine);
     return gameResult._userLine;
   }
+  // 大乱斗：压平高能力球员的爆炸产量（让 92 OVR ≈ 30 分而不是 36）
+  var _SS = (SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED && SIM_CONFIG.BRAWL.SIM && SIM_CONFIG.BRAWL.SIM.ENABLED !== false) ? SIM_CONFIG.BRAWL.SIM : null;
+  var _ssn = function(k, d) { return (_SS && isFinite(_SS[k])) ? Number(_SS[k]) : d; };
   const pos = STATE.position || 'PG';
   const pace = Number(gameResult && gameResult.pace) || 99.4;
   const mins = getPlayerRotationMinutes(attrs, pos, isPlayoff);
@@ -6964,19 +6978,19 @@ function generatePlayerStatsNew(attrs, gameResult, isPlayoff) {
   const creation = calcPlayerCreationRating(attrs, pos);
   const creation01 = simSkill01(creation);
   const posUsage = { PG:.005, SG:.012, SF:.004, PF:-.004, C:-.002 };
-  let usage = 0.10 + Math.pow(creation01, 1.24) * 0.27 + (posUsage[pos] || 0);
+  let usage = 0.10 + Math.pow(creation01, 1.24) * (_SS ? _ssn('USAGE_CURVE', 0.235) : 0.27) + (posUsage[pos] || 0);
   if (isPlayoff && creation01 > 0.62) usage += 0.01;
-  usage = Math.max(0.10, Math.min(0.39, usage));
+  usage = Math.max(0.10, Math.min(_SS ? _ssn('USAGE_CAP', 0.335) : 0.39, usage));
 
   const baseline = getSimulationPowerBaseline();
   const opponentDefense = gameResult && gameResult.teamB && gameResult.teamB.power ? Number(gameResult.teamB.power.defense) : baseline.defense;
   const defensePressure = Math.max(-0.035, Math.min(0.045, (opponentDefense - baseline.defense) * 0.003));
   const teamFGA = pace * 0.896;
   const scoringAverage = ((parseInt(attrs.threePT)||50) + (parseInt(attrs.MID)||50) + (parseInt(attrs.FIN)||50)) / 3;
-  const aggression = Math.max(0.78, Math.min(1.12, 0.96 + (scoringAverage - 70) * 0.004));
+  const aggression = Math.max(0.78, Math.min(1.12, 0.96 + (scoringAverage - 70) * (_SS ? _ssn('AGGRO_SLOPE', 0.0024) : 0.004)));
   const expectedFga = teamFGA * minsFactor * usage * aggression * (1 - defensePressure * 1.5);
   const minimumFga = mins >= 12 ? 2 : 0;
-  let fga = Math.max(minimumFga, Math.min(32, Math.round(simGaussian(expectedFga, Math.max(0.8, expectedFga * 0.10)))));
+  let fga = Math.max(minimumFga, Math.min(_SS ? _ssn('FGA_CAP', 26) : 32, Math.round(simGaussian(expectedFga, Math.max(0.8, expectedFga * 0.10)))));
 
   const baseDist = SIM_CONFIG.SHOT_DIST[pos] || SIM_CONFIG.SHOT_DIST.PG;
   const finRating = (parseInt(attrs.FIN)||50) * 0.72 + (parseInt(attrs.DNK)||50) * 0.28;
@@ -7615,10 +7629,189 @@ function showGamePopup(seasonDay) {
         </div>
 
       </div>
-      
+      ${renderFullBoxScoreHtml(result.boxScore, STATE.careerTeam, game.opponent, teamName, oppName)}
     </div>`;
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
   document.body.appendChild(modal);
+}
+
+/** 完整 box score（两队全部球员，按上场时间排序，可滚动） */
+function renderFullBoxScoreHtml(boxScore, tagA, tagB, labelA, labelB) {
+  if (!boxScore) return '';
+  function table(rows, label) {
+    if (!Array.isArray(rows) || !rows.length) return '';
+    var sorted = rows.slice().sort(function(a, b) { return (b.mins || 0) - (a.mins || 0); });
+    var h = '<div style="font-family:var(--font-display);font-size:11px;color:var(--orange);margin:6px 0 2px;">' + label + '</div>' +
+      '<div style="display:flex;gap:2px;font-size:8px;color:var(--text-muted);padding:1px 4px;">' +
+      '<span style="width:13px;">位</span><span style="flex:1;">球员</span>' +
+      '<span style="width:20px;text-align:right;">分</span><span style="width:16px;text-align:right;">板</span>' +
+      '<span style="width:16px;text-align:right;">助</span><span style="width:14px;text-align:right;">断</span>' +
+      '<span style="width:14px;text-align:right;">帽</span><span style="width:26px;text-align:right;">投篮</span>' +
+      '<span style="width:16px;text-align:right;">分钟</span></div>';
+    sorted.forEach(function(p) {
+      var u = p.isUser;
+      h += '<div style="display:flex;gap:2px;font-size:9px;padding:2px 4px;border-bottom:1px solid var(--border-light);' +
+        (u ? 'background:var(--orange-dim);border-radius:4px;' : '') + '">' +
+        '<span style="width:13px;font-size:8px;color:var(--text-muted);">' + (p.pos || '—') + '</span>' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' + (u ? 'color:var(--orange);font-weight:700;' : '') + '">' + (p.name || '') + '</span>' +
+        '<span style="width:20px;text-align:right;font-weight:600;">' + (p.pts || 0) + '</span>' +
+        '<span style="width:16px;text-align:right;">' + (p.reb || 0) + '</span>' +
+        '<span style="width:16px;text-align:right;">' + (p.ast || 0) + '</span>' +
+        '<span style="width:14px;text-align:right;">' + Math.round(p.stl || 0) + '</span>' +
+        '<span style="width:14px;text-align:right;">' + Math.round(p.blk || 0) + '</span>' +
+        '<span style="width:26px;text-align:right;font-size:8px;">' + (p.fgm || 0) + '-' + (p.fga || 0) + '</span>' +
+        '<span style="width:16px;text-align:right;color:var(--text-dim);">' + (p.mins || 0) + '</span>' +
+        '</div>';
+    });
+    return h;
+  }
+  return '<div style="padding:2px 12px 12px;">' +
+    '<div style="font-family:var(--font-display);font-size:12px;color:var(--orange);margin-bottom:2px;">📋 全场技术统计</div>' +
+    '<div style="max-height:230px;overflow-y:auto;-webkit-overflow-scrolling:touch;">' +
+    table(boxScore[tagA], (labelA || tagA)) +
+    table(boxScore[tagB], (labelB || tagB)) +
+    '</div></div>';
+}
+
+// ==================== 赛季中暂停 + 联盟面板 ====================
+window._simPaused = false;
+
+function simSideControlsHtml() {
+  var paused = !!window._simPaused;
+  return '<div id="simSideControls" style="display:flex;gap:6px;justify-content:center;padding:6px 0 2px;">' +
+    '<button class="btn btn-sm" id="simPauseBtn" onclick="toggleSimPause()" style="background:' + (paused ? 'var(--green)' : 'var(--bg-elevated)') + ';border:1.5px solid var(--border);font-size:12px;padding:5px 12px;">' +
+      (paused ? '▶ 继续' : '⏸ 暂停') + '</button>' +
+    '<button class="btn btn-sm" onclick="showLeagueBrowser()" style="background:var(--bg-elevated);border:1.5px solid var(--border);font-size:12px;padding:5px 12px;">🔍 联盟</button>' +
+  '</div>';
+}
+
+function toggleSimPause() {
+  window._simPaused = !window._simPaused;
+  var b = document.getElementById('simPauseBtn');
+  if (b) {
+    b.textContent = window._simPaused ? '▶ 继续' : '⏸ 暂停';
+    b.style.background = window._simPaused ? 'var(--green)' : 'var(--bg-elevated)';
+  }
+  if (!window._simPaused) {
+    var st = document.getElementById('simStatus');
+    if (st && /暂停/.test(st.textContent)) st.textContent = '继续模拟…';
+  }
+}
+
+/** 按能力推算某球员的赛季场均（联盟不逐场累计非用户数据，这里按 OVR + 位置估算） */
+function estimatePlayerLine(p) {
+  var ovr = parseInt(p.ovr) || 50;
+  var pos = (p.pos || 'SF').split('/')[0].trim();
+  var isU = !!p._isUser;
+  if (isU && STATE.season && STATE.season.playerStats && STATE.season.playerStats.games) {
+    var ps = STATE.season.playerStats, g = ps.games;
+    return { pts: ps.pts / g, reb: ps.reb / g, ast: ps.ast / g, stl: ps.stl / g, blk: ps.blk / g, real: true };
+  }
+  var t = Math.max(0, (ovr - 62) / 37); // 0..~1
+  return {
+    pts: Math.max(3, ovr * 0.30 - 4) * (0.75 + t * 0.5),
+    reb: (pos === 'C' ? ovr * 0.14 + 1 : pos === 'PF' ? ovr * 0.11 + 1 : pos === 'SF' ? ovr * 0.07 + 1.5 : ovr * 0.045 + 1.5),
+    ast: (pos === 'PG' ? ovr * 0.11 + 1.5 : pos === 'SG' ? ovr * 0.06 + 1 : ovr * 0.04 + 1),
+    stl: ovr >= 86 ? 1.2 : ovr >= 78 ? 0.9 : 0.6,
+    blk: (pos === 'C' ? 1.4 : pos === 'PF' ? 1.0 : 0.4) * (0.6 + t),
+    real: false
+  };
+}
+
+function _leagueBrowserBody(tab) {
+  var st = STATE.season && STATE.season.standings ? STATE.season.standings : {};
+  function teamStrengthOf(tm) { try { return getFaTeamStrength ? getFaTeamStrength(tm) : 0; } catch (e) { return 0; } }
+
+  if (tab === 'standings') {
+    function confTable(list, title) {
+      var rows = list.map(function(tm) { return { team: tm, wins: (st[tm] && st[tm].wins) || 0, losses: (st[tm] && st[tm].losses) || 0, streak: st[tm] && st[tm].streak, streakLen: st[tm] && st[tm].streakLen }; })
+        .sort(function(a, b) { return (b.wins - b.losses) - (a.wins - a.losses) || b.wins - a.wins; });
+      var h = '<div style="font-family:var(--font-display);font-size:13px;font-weight:700;margin:8px 0 4px;">' + title + '</div>' +
+        '<div class="st-hdr"><span>#</span><span>球队</span><span>胜</span><span>负</span><span>近况</span></div>';
+      rows.forEach(function(r, i) {
+        var my = r.team === STATE.careerTeam;
+        h += '<div class="st-row ' + (my ? 'st-my' : '') + '"><span>' + (i + 1) + '</span>' +
+          '<span>' + getTeamLogo(r.team, 14) + ' ' + getTeamName(r.team) + (my ? ' ⭐' : '') + '</span>' +
+          '<span class="st-w">' + r.wins + '</span><span class="st-l">' + r.losses + '</span>' +
+          '<span class="st-streak">' + (r.streakLen > 0 ? r.streak + r.streakLen : '-') + '</span></div>';
+      });
+      return h;
+    }
+    return confTable(SIM_CONFIG.CONFERENCE.EAST, '东部') + confTable(SIM_CONFIG.CONFERENCE.WEST, '西部');
+  }
+
+  if (tab === 'rosters') {
+    var teams = NBA2K_TEAMS.slice().sort(function(a, b) { return teamStrengthOf(b) - teamStrengthOf(a); });
+    var h = '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">按球队强度（前 9 人等效 OVR 均值）排序，点球队名展开阵容</div>';
+    teams.forEach(function(tm) {
+      var roster = (NBA2K_DATA[tm] || []).slice().sort(function(a, b) { return (parseInt(b.ovr) || 0) - (parseInt(a.ovr) || 0); });
+      var strong = teamStrengthOf(tm);
+      h += '<details style="border:1px solid var(--border);border-radius:8px;margin:4px 0;padding:2px 6px;">' +
+        '<summary style="cursor:pointer;font-size:12px;font-weight:700;padding:4px 0;">' +
+          getTeamLogo(tm, 16) + ' ' + getTeamName(tm) + (tm === STATE.careerTeam ? ' ⭐' : '') +
+          ' <span style="color:var(--text-dim);font-weight:400;">强度 ' + strong.toFixed(1) + ' · ' + roster.length + '人</span></summary>';
+      roster.forEach(function(p) {
+        var u = p._isUser || p.name === getHupuDisplayName();
+        h += '<div style="display:flex;gap:4px;font-size:10px;padding:2px 2px;border-bottom:1px solid var(--border-light);' + (u ? 'color:var(--orange);font-weight:700;' : '') + '">' +
+          '<span style="width:26px;color:var(--text-muted);">' + ((p.pos || '—').split('/')[0].trim()) + '</span>' +
+          '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (p.cname || p.name) + '</span>' +
+          '<span style="color:var(--text-dim);">' + (p._age || p.age || '—') + '岁</span>' +
+          '<span style="width:26px;text-align:right;font-weight:700;">' + (p.ovr || '—') + '</span></div>';
+      });
+      h += '</details>';
+    });
+    return h;
+  }
+
+  // leaders
+  var all = [];
+  NBA2K_TEAMS.forEach(function(tm) {
+    (NBA2K_DATA[tm] || []).forEach(function(p) {
+      if ((parseInt(p.ovr) || 0) < 74 && !p._isUser) return;
+      var line = estimatePlayerLine(p);
+      all.push({ name: p.cname || p.name, team: tm, ovr: parseInt(p.ovr) || 0, isU: !!p._isUser || (p.name === getHupuDisplayName()), real: line.real, pts: line.pts, reb: line.reb, ast: line.ast });
+    });
+  });
+  function board(key, label) {
+    var top = all.slice().sort(function(a, b) { return b[key] - a[key]; }).slice(0, 15);
+    var h = '<div style="font-family:var(--font-display);font-size:12px;color:var(--orange);margin:8px 0 3px;">' + label + '</div>';
+    top.forEach(function(r, i) {
+      h += '<div style="display:flex;gap:4px;font-size:10px;padding:2px 2px;border-bottom:1px solid var(--border-light);' + (r.isU ? 'background:var(--orange-dim);border-radius:4px;color:var(--orange);font-weight:700;' : '') + '">' +
+        '<span style="width:16px;color:var(--text-muted);">' + (i + 1) + '</span>' +
+        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.name + ' <span style="color:var(--text-dim);font-weight:400;">' + getTeamName(r.team) + '</span></span>' +
+        '<span style="width:34px;text-align:right;font-weight:700;">' + r[key].toFixed(1) + '</span></div>';
+    });
+    return h;
+  }
+  return '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">⚠️ 联盟不逐场累计非用户数据，下列为按能力推算的赛季场均（你的数据为真实值）</div>' +
+    board('pts', '得分榜') + board('reb', '篮板榜') + board('ast', '助攻榜');
+}
+
+function showLeagueBrowser() {
+  if (!STATE._leagueTab) STATE._leagueTab = 'standings';
+  var old = document.getElementById('league-browser'); if (old) old.remove();
+  var tab = STATE._leagueTab;
+  var modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'league-browser';
+  modal.innerHTML =
+    '<div class="modal-content" style="max-width:340px;max-height:82vh;display:flex;flex-direction:column;">' +
+      '<div class="modal-header" style="padding:8px 12px;"><span style="font-family:var(--font-display);font-size:16px;">🔍 联盟概览</span>' +
+        '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">✕</button></div>' +
+      '<div class="modal-tabs">' +
+        '<button class="' + (tab === 'standings' ? 'active' : '') + '" onclick="switchLeagueTab(\'standings\')">排名</button>' +
+        '<button class="' + (tab === 'rosters' ? 'active' : '') + '" onclick="switchLeagueTab(\'rosters\')">球队阵容</button>' +
+        '<button class="' + (tab === 'leaders' ? 'active' : '') + '" onclick="switchLeagueTab(\'leaders\')">数据榜</button>' +
+      '</div>' +
+      '<div class="modal-body" style="overflow-y:auto;-webkit-overflow-scrolling:touch;">' + _leagueBrowserBody(tab) + '</div>' +
+    '</div>';
+  modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+}
+
+function switchLeagueTab(t) {
+  STATE._leagueTab = t;
+  showLeagueBrowser();
 }
 
 // ==================== 排行榜弹窗 ====================
@@ -9313,32 +9506,7 @@ function showPlayoffGamePopup(round, seriesIdx, gameIdx) {
   // 全队BoxScore — 各队得分前5的球员
   let boxHtml = '';
   if (g.boxScore) {
-    const homeBox = g.boxScore[myTeamTag] || [];
-    const awayBox = g.boxScore[oppTeamTag] || [];
-    
-    // 按得分排序取前5
-    const topHome = [...homeBox].sort((a, b) => b.pts - a.pts).slice(0, 5);
-    const topAway = [...awayBox].sort((a, b) => b.pts - a.pts).slice(0, 5);
-    
-    function renderBoxRows(players, label, isHome) {
-      let h = `<div style="margin-top:6px;">
-        <div style="font-size:10px;color:var(--text-dim);margin-bottom:2px;font-weight:600;">${label}</div>`;
-      players.forEach(p => {
-        const isU = p.isUser;
-        h += `<div style="display:flex;gap:2px;padding:2px 0;font-size:9px;border-bottom:1px solid var(--border-light);${isU ? 'background:var(--orange-dim);border-radius:4px;padding:2px 4px;' : ''}">
-          <span style="width:14px;font-size:8px;color:var(--text-muted);">${p.pos || '—'}</span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:${isU ? 700 : 400};${isU ? 'color:var(--orange);' : ''}">${p.name}</span>
-          <span style="width:18px;text-align:right;font-weight:600;">${p.pts}</span>
-          <span style="width:14px;text-align:right;">${p.reb}</span>
-          <span style="width:14px;text-align:right;">${p.ast}</span>
-          <span style="width:22px;text-align:right;font-size:8px;">${p.fgm}-${p.fga}</span>
-        </div>`;
-      });
-      h += `</div>`;
-      return h;
-    }
-    
-    boxHtml = '';
+    boxHtml = renderFullBoxScoreHtml(g.boxScore, myTeamTag, oppTeamTag, getTeamName(myTeam), getTeamName(oppName));
   }
   
   // 关键事件
@@ -19252,6 +19420,7 @@ function renderSeasonScreenDOM() {
     '</div>' +
     (typeof renderPlayerStateStrip === 'function' ? renderPlayerStateStrip() : '') +
     renderEventStatus() +
+    simSideControlsHtml() +
     '<div class="dot-grid" id="simDotGrid">' +
       '<div style="display:flex;align-items:center;justify-content:center;width:100%;min-height:120px;">' +
         '<div class="loading-balls"><span class="loading-ball"></span><span class="loading-ball"></span><span class="loading-ball"></span></div>' +
