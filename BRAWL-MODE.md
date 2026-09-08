@@ -66,6 +66,31 @@
 
 实现：`getFaTeamStrength()` + `assignFreeAgents()` 里的 `faAffinity()` / `faRejectsTeam()` / 每球员按意向重排 `orderedTeams`。
 
+## 🎟️ 选秀：战绩差的队优先拿好新秀
+
+以前只有 `processDraft()` 给每队发一个「按战绩分档」的普通新秀,6 名明星新秀(OVR 85)和大乱斗历史新秀是在 `evolveLeague` 补名单时**随机**分掉的,弱队沾不上光。现在:
+
+- `evolveLeague` 补名单只产出**普通填充新秀**(`window._rookieGenPlain`),明星 / 历史新秀全部留给 `processDraft`。
+- `processDraft` 组一张「新秀榜」(最好→最差),**逆序发放**:第 1 顺位 = 上赛季最差的队。
+  - 前 `HISTORICAL_TOP_PICKS`(默认 5)顺位:大乱斗模式下保底拿到历史球星新秀(OVR 常 90+)。
+  - 接着 `STAR_ROOKIE_PICKS`(默认 6)顺位:6 名明星新秀(OVR 85)。
+  - 其余按 `LOTTERY_TIERS` 分档的普通新秀(状元 78–85 … 末位 62–72)。
+- 实测(非大乱斗):最差的 6 支队 = 选秀前 6 顺位 = 拿到全部 6 名明星新秀;大乱斗:最差 5 队拿到贾巴尔 98 / 科怀 94 / 托尼-帕克 90 这种历史卡。
+- 参数:`assets/js/config.js` → `SIM_CONFIG.DRAFT`(`WORST_FIRST` / `HISTORICAL_TOP_PICKS` / `STAR_ROOKIE_PICKS` / `LOTTERY_TIERS`)。
+- 备注:明星新秀池是**一次性**的(整局 6 个),用完后每年顶级顺位就是历史新秀(大乱斗)或 78–85 的普通新秀。
+
+## 🧢 球队实力上限（工资帽）
+
+- **动态帽**:`cap = 联盟平均强度 + SIM_CONFIG.FREE_AGENCY.STRENGTH_CAP_OVER_AVG`(默认 +4.5)。球队强度 = roster 里等效 OVR 最高的前 9 人平均。
+- **达到帽的球队,自由球员 / 交易都不能再让它变强**:
+  - `assignFreeAgents`:`overCap(t)` 的队直接跳过;每签一人立刻重算该队强度,帽随之收紧。
+  - `processTrades`:一笔交易若让某队「越过帽 **且** 比交易前更强」,则不成立(允许平级 / 降级交易)。
+- **新秀合同福利**:新秀在新秀合同期内(`ROOKIE_CONTRACT_YEARS` 默认 4 年),OVR 只按 `ROOKIE_OVR_DISCOUNT`(默认 **0.75**)计入球队强度 / 帽 → 摆烂选中的高分新秀不会一下顶爆帽,鼓励通过选秀重建。
+  - 实测:一队塞 9 个 OVR 92 的新秀,球队强度按 **69** 算(92×0.75),不占满帽。
+- 实测:40 名 OVR 87–94 的强援涌入市场,启用帽后没有球队强度超过 `cap+1`(个别 +0.19 的软着陆);关掉帽则强队会吸到 88+。
+- 参数:`SIM_CONFIG.FREE_AGENCY`(`STRENGTH_CAP_ENABLED` / `STRENGTH_CAP_OVER_AVG` / `ROOKIE_OVR_DISCOUNT` / `ROOKIE_CONTRACT_YEARS`)。
+- 实现:`stampRookieContract()` / `playerCapOvr()` / `getFaTeamStrength()`(改为等效 OVR)/ `getLeagueStrengthCap()` / `assignFreeAgents` 的 `overCap()` / `processTrades` 的 `tradeViolatesCap()`。
+
 ## 大乱斗：做了两件事
 
 ### 1. 把 `SIM_CONFIG` 抽成独立文件

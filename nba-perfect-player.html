@@ -19294,6 +19294,7 @@ function applyDraftClass2026() {
       attrKeys.forEach(function(k) {
         rookie[k] = Math.max(25, Math.min(99, ovr + Math.floor(Math.random() * 16) - 8));
       });
+      if (typeof stampRookieContract === 'function') stampRookieContract(rookie, 2026);
       roster.push(rookie);
     });
   });
@@ -19314,45 +19315,106 @@ function saveStandings() {
   }
 }
 
+function _draftTierForPick(pickNum) {
+  var tiers = (SIM_CONFIG.DRAFT && SIM_CONFIG.DRAFT.LOTTERY_TIERS) || [];
+  for (var i = 0; i < tiers.length; i++) if (pickNum <= tiers[i].maxPick) return tiers[i];
+  return tiers[tiers.length - 1] || { min: 62, max: 72 };
+}
+
+/** 明星新秀（STAR_ROOKIES 条目）→ 联盟球员对象 */
+function _makeStarRookieProspect(entry) {
+  var attrKeys = SIM_CONFIG.ATTR_LIST || ['threePT','MID','FIN','DNK','HAN','PAS','PDEF','IDEF','BLK','REB','ATH','STR','CLU'];
+  var allPos = ['PG','SG','SF','PF','C'];
+  var ovr = entry.ovr || 85;
+  var p = {
+    name: 'Rookie_' + (++_rookieNameSeq),
+    nameEN: entry.en, cname: entry.cn,
+    pos: allPos[Math.floor(rngNext() * allPos.length)],
+    height: "6'7\"", type: '新秀', ovr: ovr,
+    _age: 19 + Math.floor(rngNext() * 3),
+    _enterYear: _currentSeasonYear(),
+    photoLocal: nextGeneratedRookiePortrait(), photoStatus: 'cached', photoSource: 'generated-rookie-pool',
+    _starRookie: true
+  };
+  attrKeys.forEach(function(k) { p[k] = Math.max(25, Math.min(99, ovr + Math.floor(rngNext() * 16) - 8)); });
+  if (entry.en) _usedRookieCandidateNames[entry.en] = true;
+  return stampRookieContract(p, p._enterYear);
+}
+
+/** 选秀：战绩越差顺位越高，最好的新秀（普通/明星/历史）先给最差的球队 */
 function processDraft() {
   if (!STATE._prevStandings) return;
-  var st = STATE._prevStandings;
-  // 按胜率排（差在前）
-  var teams = NBA2K_TEAMS.slice().sort(function(a, b) {
-    var aw = (st[a] && st[a].wins) || 0, al = (st[a] && st[a].losses) || 0;
-    var bw = (st[b] && st[b].wins) || 0, bl = (st[b] && st[b].losses) || 0;
-    var ap = aw + al > 0 ? aw / (aw + al) : 0.5;
-    var bp = bw + bl > 0 ? bw / (bw + bl) : 0.5;
-    return ap - bp;
-  });
+  var dcfg = (SIM_CONFIG && SIM_CONFIG.DRAFT) || {};
   var attrKeys = SIM_CONFIG.ATTR_LIST || ['threePT','MID','FIN','DNK','HAN','PAS','PDEF','IDEF','BLK','REB','ATH','STR','CLU'];
+  var enterYear = _currentSeasonYear();
+  var st = STATE._prevStandings;
 
+  var teams = NBA2K_TEAMS.slice();
+  if (dcfg.WORST_FIRST !== false) {
+    teams.sort(function(a, b) {
+      var aw = (st[a] && st[a].wins) || 0, al = (st[a] && st[a].losses) || 0;
+      var bw = (st[b] && st[b].wins) || 0, bl = (st[b] && st[b].losses) || 0;
+      var ap = aw + al > 0 ? aw / (aw + al) : 0.5;
+      var bp = bw + bl > 0 ? bw / (bw + bl) : 0.5;
+      return ap - bp;               // 胜率低的排前面 = 顺位靠前
+    });
+  }
+
+  // ---- 新秀榜（从最好到最差），长度 = 球队数 ----
+  var board = [];
+  var brawlOn = !!(SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED);
+  var histTop = brawlOn ? Math.max(0, Number(dcfg.HISTORICAL_TOP_PICKS) || 0) : 0;
+  for (var h = 0; h < histTop && board.length < teams.length; h++) {
+    var card = (typeof drawBrawlHistoricalCard === 'function') ? drawBrawlHistoricalCard() : null;
+    if (!card) break;
+    board.push(makeHistoricalRookie(card));            // 一般 OVR 90+
+  }
+  var starN = Math.max(0, Number(dcfg.STAR_ROOKIE_PICKS) || 0);
+  for (var s = 0; s < starN && _starRookieQueue.length && board.length < teams.length; s++) {
+    board.push(_makeStarRookieProspect(_starRookieQueue.shift()));   // OVR 85
+  }
+  while (board.length < teams.length) {                // 其余普通新秀，OVR 按顺位分层
+    var pickNum = board.length + 1;
+    var tier = _draftTierForPick(pickNum);
+    window._rookieGenPlain = true;
+    var rk = generateRookie();
+    window._rookieGenPlain = false;
+    var target = tier.min + Math.floor(rngNext() * (tier.max - tier.min + 1));
+    rk.ovr = target;
+    attrKeys.forEach(function(k) { rk[k] = Math.max(25, Math.min(99, target + Math.floor(rngNext() * 16) - 8)); });
+    stampRookieContract(rk, enterYear);
+    board.push(rk);
+  }
+
+  // ---- 逆序发放：第 idx 顺位（0 = 最差队）拿 board[idx] ----
   teams.forEach(function(t, idx) {
-    var ovrRange;
-    if (idx === 0) ovrRange = { min: 75, max: 82 };
-    else if (idx === 1) ovrRange = { min: 73, max: 80 };
-    else if (idx === 2) ovrRange = { min: 72, max: 78 };
-    else if (idx < 10) ovrRange = { min: 68, max: 75 };
-    else ovrRange = { min: 60, max: 70 };
-
-    var rookie = generateRookie();
-    var targetOvr = ovrRange.min + Math.floor(rngNext() * (ovrRange.max - ovrRange.min + 1));
-    rookie.ovr = targetOvr;
-    attrKeys.forEach(function(k) { rookie[k] = Math.max(25, Math.min(99, targetOvr + Math.floor(rngNext() * 16) - 8)); });
-    // 新秀合同
-    if (idx < 5) rookie.contract = 3 + Math.floor(rngNext() * 2);
-    else if (idx < 14) rookie.contract = 2 + Math.floor(rngNext() * 3);
-    else rookie.contract = 1 + Math.floor(rngNext() * 3);
+    var prospect = board[idx];
+    if (!prospect) return;
+    stampRookieContract(prospect, enterYear);
+    prospect.contract = idx < 5 ? 3 + Math.floor(rngNext() * 2)
+                      : idx < 14 ? 2 + Math.floor(rngNext() * 3)
+                      : 1 + Math.floor(rngNext() * 3);
 
     var roster = NBA2K_DATA[t];
     if (!roster) return;
-    var lowestIdx = -1, lowestOvr = 999;
+    // 换掉队里最弱的“新秀槽”；没有则换掉最弱的非用户边缘球员（OVR < 76）
+    var repIdx = -1, repOvr = 999;
     roster.forEach(function(p, pi) {
-      if (p.name && p.name.indexOf('Rookie_') >= 0 && p.ovr < lowestOvr) {
-        lowestOvr = p.ovr; lowestIdx = pi;
-      }
+      var isSlot = p.name && (p.name.indexOf('Rookie_') >= 0 || p.name.indexOf('HistRookie_') >= 0);
+      if (isSlot && p.ovr < repOvr) { repOvr = p.ovr; repIdx = pi; }
     });
-    if (lowestIdx >= 0) roster[lowestIdx] = rookie;
+    if (repIdx < 0) {
+      repOvr = 76;
+      roster.forEach(function(p, pi) {
+        if (!p._isUser && !p._justSigned && (Number(p.ovr) || 0) < repOvr) { repOvr = p.ovr; repIdx = pi; }
+      });
+    }
+    if (repIdx >= 0) roster[repIdx] = prospect;
+    else if (roster.length < 18) roster.push(prospect);
+
+    if (STATE._leagueChanges && STATE._leagueChanges.rookies) {
+      STATE._leagueChanges.rookies.push({ name: prospect.cname || prospect.name, team: t, pick: idx + 1, ovr: prospect.ovr });
+    }
   });
 }
 
@@ -19365,16 +19427,53 @@ function randomContractByAge(age) {
   return 1;
 }
 
-/** 球队强度：roster 里 OVR 最高的前 N 人平均值 */
-function getFaTeamStrength(t) {
+/** 当前赛季对应年份（2026 起） */
+function _currentSeasonYear() {
+  return 2026 + ((STATE.career && STATE.career.seasonCount) || 0);
+}
+
+/** 给新秀盖上“新秀合同期”标记；期内 OVR 计入球队强度 / 帽时享受折扣 */
+function stampRookieContract(p, enterYear) {
+  if (!p) return p;
+  var yrs = Number(SIM_CONFIG.FREE_AGENCY && SIM_CONFIG.FREE_AGENCY.ROOKIE_CONTRACT_YEARS) || 4;
+  p._enterYear = enterYear || p._enterYear || _currentSeasonYear();
+  p._rookieContractUntil = p._enterYear + yrs;
+  return p;
+}
+
+/** 计入球队强度 / 帽时的等效 OVR（新秀合同期内打折） */
+function playerCapOvr(p) {
+  var ovr = Number(p && p.ovr) || 0;
+  var cfg = (SIM_CONFIG && SIM_CONFIG.FREE_AGENCY) || {};
+  var disc = Number(cfg.ROOKIE_OVR_DISCOUNT);
+  var until = Number(p && p._rookieContractUntil) || 0;
+  if (disc > 0 && disc < 1 && until && _currentSeasonYear() < until) return ovr * disc;
+  return ovr;
+}
+
+/** 球队强度：roster 里“等效 OVR”最高的前 N 人平均值（新秀按折扣计） */
+function getFaTeamStrength(t, rosterOverride) {
   var cfg = (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.FREE_AGENCY) || {};
-  var ratings = (NBA2K_DATA[t] || []).map(function(p) { return Number(p.ovr) || 0; })
-    .sort(function(a, b) { return b - a; });
+  var roster = rosterOverride || NBA2K_DATA[t] || [];
+  var ratings = roster.map(function(p) { return playerCapOvr(p); }).sort(function(a, b) { return b - a; });
   if (!ratings.length) return 75;
   var n = Math.max(1, Math.min(ratings.length, Number(cfg.TEAM_STRENGTH_TOP_N) || 9));
   var sum = 0;
   for (var i = 0; i < n; i++) sum += ratings[i] || 0;
   return sum / n;
+}
+
+/** 联盟平均强度 + 帽（动态） */
+function getLeagueStrengthCap() {
+  var cfg = (SIM_CONFIG && SIM_CONFIG.FREE_AGENCY) || {};
+  var sum = 0, c = 0;
+  NBA2K_TEAMS.forEach(function(t) { sum += getFaTeamStrength(t); c++; });
+  var avg = c ? sum / c : 80;
+  return {
+    avg: avg,
+    enabled: cfg.STRENGTH_CAP_ENABLED !== false,
+    cap: avg + (Number(cfg.STRENGTH_CAP_OVER_AVG) != null ? Number(cfg.STRENGTH_CAP_OVER_AVG) : 4.5)
+  };
 }
 
 function assignFreeAgents() {
@@ -19402,6 +19501,11 @@ function assignFreeAgents() {
   var strSum = 0;
   NBA2K_TEAMS.forEach(function(t) { var s = getFaTeamStrength(t); strengthByTeam[t] = s; strSum += s; });
   var leagueAvgStrength = NBA2K_TEAMS.length ? strSum / NBA2K_TEAMS.length : 78;
+
+  // 球队实力上限（工资帽）：达到上限的球队不能再签自由球员
+  var capEnabled = faCfg.STRENGTH_CAP_ENABLED !== false;
+  var capValue = leagueAvgStrength + (Number(faCfg.STRENGTH_CAP_OVER_AVG) != null ? Number(faCfg.STRENGTH_CAP_OVER_AVG) : 4.5);
+  function overCap(t) { return capEnabled && (strengthByTeam[t] != null ? strengthByTeam[t] : 0) >= capValue; }
 
   // fa 对球队 t 的加盟意向分（越高越想去）
   function faAffinity(fa, t) {
@@ -19437,6 +19541,7 @@ function assignFreeAgents() {
       var t = orderedTeams[ti];
       if (t === fa._origTeam) { console.log('[FA] 跳过回原队:', (fa.cname||fa.name), fa._origTeam); continue; }
       if (faRejectsTeam(fa, t)) { continue; }
+      if (overCap(t)) { continue; }   // 该队已达实力上限，不能再变强
 
       var roster = NBA2K_DATA[t];
       if (!roster || roster.length >= 18) continue;
@@ -19470,6 +19575,7 @@ function assignFreeAgents() {
       if (willSign) {
         roster.push(fa);
         fa._justSigned = true;
+        strengthByTeam[t] = getFaTeamStrength(t);   // 签完立刻更新，帽子随之收紧
         if (isStarFA) starSignedTeams[t] = true;
         STATE._leagueChanges.freeSignings.push({ name: fa.cname || fa.name, nameEN: fa.name, from: fa._origTeam, to: t, ovr: fa.ovr });
         if (t === STATE.careerTeam) {
@@ -19484,6 +19590,7 @@ function assignFreeAgents() {
     for (var fi = 0; fi < orderedTeams.length; fi++) {
       var fb = orderedTeams[fi];
       if (fb === fa._origTeam) { console.log('[FA] fallback跳过回原队:', (fa.cname||fa.name), fa._origTeam); continue; }
+      if (overCap(fb)) { continue; }
       if (fa.ovr > 86) {
         if (starSignedTeams[fb]) continue;
         var hasStarFB = false;
@@ -19496,6 +19603,7 @@ function assignFreeAgents() {
       if (fbRoster && fbRoster.length < 18) {
         fbRoster.push(fa);
         fa._justSigned = true;
+        strengthByTeam[fb] = getFaTeamStrength(fb);
         if (fa.ovr > 86) starSignedTeams[fb] = true;
         STATE._leagueChanges.freeSignings.push({ name: fa.cname || fa.name, nameEN: fa.name, from: fa._origTeam, to: fb, ovr: fa.ovr });
         break;
@@ -19544,6 +19652,17 @@ function processTrades() {
   if (!NBA2K_DATA) return;
   if (!STATE._leagueChanges) STATE._leagueChanges = { retired: [], rookies: [], teamChanges: {}, trades: [] };
   if (!STATE._leagueChanges.trades) STATE._leagueChanges.trades = [];
+
+  // 球队实力上限：一笔交易若让某队“越过帽子且比交易前更强”，则不成立
+  var _tradeCap = getLeagueStrengthCap();
+  function tradeViolatesCap(team, incoming, outgoing) {
+    if (!_tradeCap.enabled) return false;
+    var roster = NBA2K_DATA[team] || [];
+    var before = getFaTeamStrength(team, roster);
+    var after = roster.filter(function(p) { return p !== outgoing; }).concat([incoming]);
+    var afterStr = getFaTeamStrength(team, after);
+    return afterStr > _tradeCap.cap && afterStr > before + 0.01;
+  }
 
   // 算每队需求位置
   var needs = {};
@@ -19594,7 +19713,9 @@ function processTrades() {
       if (playerForA && playerForB) {
         var diff = Math.abs(playerForA.ovr - playerForB.ovr);
         console.log('[Trade] 配对:', a, needA, 'vs', b, needB, '候选人:', (playerForA.cname||playerForA.name), playerForA.ovr, (playerForB.cname||playerForB.name), playerForB.ovr, 'diff:', diff);
-        if (diff <= 8) {
+        if (diff <= 8 &&
+            !tradeViolatesCap(a, playerForA, playerForB) &&
+            !tradeViolatesCap(b, playerForB, playerForA)) {
           tradedPlayers.add(playerForA);
           tradedPlayers.add(playerForB);
           tradedTeams.add(a);
@@ -19778,15 +19899,18 @@ function evolveLeague() {
       if (p.type === '新秀') p.type = '球员';
       newRoster.push(p);
     });
+    window._rookieGenPlain = true;   // 补名单只用普通新秀；明星 / 历史新秀留给 processDraft 按逆序发
     while (newRoster.length < 18) { // 休赛期名单补齐到 18 人
       var rk = generateRookie();
       rk._enterYear = incomingSeasonStart;
+      if (typeof stampRookieContract === 'function') stampRookieContract(rk, incomingSeasonStart);
       newRoster.push(rk);
       STATE._leagueChanges.rookies.push({ name: rk.cname || rk.name, team: t });
       if (t === STATE.careerTeam && STATE._leagueChanges.teamChanges[t]) {
         STATE._leagueChanges.teamChanges[t].rookies.push(rk.cname || rk.name);
       }
     }
+    window._rookieGenPlain = false;
     NBA2K_DATA[t] = newRoster;
   });
 
@@ -20256,13 +20380,18 @@ function makeHistoricalRookie(card) {
     if (!isFinite(v)) v = ovr;
     p[k] = Math.max(25, Math.min(99, Math.round(v * ratio)));
   });
-  return p;
+  return (typeof stampRookieContract === 'function') ? stampRookieContract(p, p._enterYear) : p;
 }
 
-function generateRookie() {
-  // 大乱斗：按比例把这名新秀替换成历史球员
+// evolveLeague 补名单时置 true：只产出“普通新秀”，把明星新秀 / 历史新秀留给 processDraft 按逆序发。
+window._rookieGenPlain = false;
+
+function generateRookie(opts) {
+  opts = opts || {};
+  var plain = opts.plain || window._rookieGenPlain;
+  // 大乱斗：按比例把这名新秀替换成历史球员（普通补位时跳过）
   var _b = getBrawlConfig();
-  if (_b && _b.ENABLED && rngNext() < (Number(_b.ROOKIE_HISTORICAL_RATIO) || 0)) {
+  if (!plain && _b && _b.ENABLED && rngNext() < (Number(_b.ROOKIE_HISTORICAL_RATIO) || 0)) {
     var _card = drawBrawlHistoricalCard();
     if (_card) return makeHistoricalRookie(_card);
   }
@@ -20270,7 +20399,7 @@ function generateRookie() {
   var pos = allPos[Math.floor(rngNext() * allPos.length)];
   var available = ROOKIE_CANDIDATES.filter(function(x) { return !_usedRookieCandidateNames[x.en]; });
   if (available.length === 0) available = ROOKIE_CANDIDATES;
-  var pick = _starRookieQueue.length > 0
+  var pick = (!plain && _starRookieQueue.length > 0)
     ? _starRookieQueue.shift()
     : available[Math.floor(rngNext() * available.length)];
   if (pick && pick.en) _usedRookieCandidateNames[pick.en] = true;
@@ -20288,7 +20417,7 @@ function generateRookie() {
   };
   var attrKeys = SIM_CONFIG.ATTR_LIST || ['threePT','MID','FIN','DNK','HAN','PAS','PDEF','IDEF','BLK','REB','ATH','STR','CLU'];
   attrKeys.forEach(function(k) { p[k] = Math.max(25, Math.min(99, ovr + Math.floor(rngNext() * 16) - 8)); });
-  return p;
+  return (typeof stampRookieContract === 'function') ? stampRookieContract(p, p._enterYear) : p;
 }
 
 // ==================== 启动 ====================
