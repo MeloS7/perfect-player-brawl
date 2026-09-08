@@ -6562,20 +6562,69 @@ function simulate82StyleMatchup(teamA, teamB, options) {
   var averageDepth = ((Number(powerA.depth) || 60) + (Number(powerB.depth) || 60)) / 2;
   // 2025-26联盟基线：99.4回合、115.7进攻效率。
   var pace = Math.max(90, Math.min(109, Math.round(99.4 + (averageAthletic - baseline.athletic) * 0.08 + (averageDepth - baseline.depth) * 0.02 + simGaussian(0, 2.8))));
+  // 大乱斗比赛微调（1 拉开强弱 / 2 关键球 / 3 你的发挥 / 4 降方差）
+  var BS = (SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED && SIM_CONFIG.BRAWL.SIM && SIM_CONFIG.BRAWL.SIM.ENABLED !== false) ? SIM_CONFIG.BRAWL.SIM : null;
+  var _bsn = function(k, d) { return (BS && isFinite(BS[k])) ? Number(BS[k]) : d; };  // 允许配置成 0
+  var edgeCoeff = _bsn('EDGE_COEFF', 0.0034);
+  var depthCoeff = _bsn('DEPTH_EDGE_COEFF', 0.00075);
+
   var edgeA = ((powerA.offense - baseline.offense) + modA.offense) - ((powerB.defense - baseline.defense) + modB.defense);
   var edgeB = ((powerB.offense - baseline.offense) + modB.offense) - ((powerA.defense - baseline.defense) + modA.defense);
-  var depthEdge = ((Number(powerA.depth) || 60) - (Number(powerB.depth) || 60)) * 0.00075;
+  var depthEdge = ((Number(powerA.depth) || 60) - (Number(powerB.depth) || 60)) * depthCoeff;
   var seedPts = (Number(options.seedBonus) || 0) * 0.65;
   var injuryPts = options.probMultiplier == null ? 0 : (Number(options.probMultiplier) - 1) * 28;
   // 中立场基准1.154；计入每场一个主队的优势后，联盟均值约115.6分。
-  var efficiencyA = 1.154 + edgeA * 0.0034 + depthEdge + homeA - fatigueA * 0.012 + seedPts / pace + injuryPts / pace;
-  var efficiencyB = 1.154 + edgeB * 0.0034 - depthEdge + homeB - fatigueB * 0.012 - seedPts / pace;
+  var efficiencyA = 1.154 + edgeA * edgeCoeff + depthEdge + homeA - fatigueA * 0.012 + seedPts / pace + injuryPts / pace;
+  var efficiencyB = 1.154 + edgeB * edgeCoeff - depthEdge + homeB - fatigueB * 0.012 - seedPts / pace;
   efficiencyA = Math.max(0.91, Math.min(1.36, efficiencyA));
   efficiencyB = Math.max(0.91, Math.min(1.36, efficiencyB));
-  var varianceA = Math.max(4.6, Math.min(10, 6.4 + modA.variance));
-  var varianceB = Math.max(4.6, Math.min(10, 6.4 + modB.variance));
+
+  // (3) 你的单场发挥影响己方效率：跟自己近期状态（GmSc 的 EWMA）比，打得好加成、打铁减成
+  var _userLine = null, _userForm = 0;
+  if (BS && teamA === STATE.careerTeam && STATE.finalOVR && !options.neutralState && !options.leagueGame && options.probMultiplier == null) {
+    try {
+      var _isPO = !!(STATE.season && STATE.season.isPlayoffs);
+      var _pre = { pace: pace, scoreA: Math.round(pace * efficiencyA), scoreB: Math.round(pace * efficiencyB), teamB: { power: powerB }, boxScore: null };
+      _userLine = generatePlayerStatsNew(STATE.attrs, _pre, _isPO);
+      var gmsc = _userLine.pts + 0.4 * _userLine.fgm - 0.7 * _userLine.fga - 0.4 * (_userLine.fta - _userLine.ftm)
+        + 0.7 * _userLine.reb + 0.7 * _userLine.ast + _userLine.stl + 0.7 * _userLine.blk - _userLine.tov;
+      if (STATE.season) {
+        var _ew = STATE.season._userGmScEwma;
+        if (_ew == null) {
+          STATE.season._userGmScEwma = gmsc;   // 赛季首场：无加成，只建立基准
+        } else {
+          var _uMax = _bsn('USER_IMPACT_MAX_PTS', 4.5);
+          var impactPts = Math.max(-_uMax, Math.min(_uMax, (gmsc - _ew) * _bsn('USER_IMPACT_COEFF', 0.30)));
+          efficiencyA = Math.max(0.91, Math.min(1.36, efficiencyA + impactPts / pace));
+          _userForm = gmsc - _ew;
+          STATE.season._userGmScEwma = 0.85 * _ew + 0.15 * gmsc;
+        }
+      }
+    } catch (e) { _userLine = null; }
+  }
+
+  var vbase = _bsn('SCORE_VARIANCE_BASE', 6.4);
+  var vmin = _bsn('SCORE_VARIANCE_MIN', 4.6);
+  var vmax = _bsn('SCORE_VARIANCE_MAX', 10);
+  var varianceA = Math.max(vmin, Math.min(vmax, vbase + modA.variance));
+  var varianceB = Math.max(vmin, Math.min(vmax, vbase + modB.variance));
   var regulationA = Math.max(80, Math.min(155, Math.round(pace * efficiencyA + simGaussian(0, varianceA))));
   var regulationB = Math.max(80, Math.min(155, Math.round(pace * efficiencyB + simGaussian(0, varianceB))));
+
+  // (2) 关键球：分差很小的时候，按两队“关键值”差修正
+  if (BS) {
+    var rawMargin = regulationA - regulationB;
+    var cm = _bsn('CLUTCH_MARGIN', 5);
+    if (Math.abs(rawMargin) <= cm) {
+      var clutchEdge = (Number(powerA.clutch) || 60) - (Number(powerB.clutch) || 60);
+      var closeness = 1 - Math.abs(rawMargin) / (cm + 1);
+      var shift = Math.round(clutchEdge * _bsn('CLUTCH_COEFF', 0.16) * closeness);
+      shift = Math.max(-5, Math.min(5, shift));
+      regulationA = Math.max(80, Math.min(155, regulationA + shift));
+      regulationB = Math.max(80, Math.min(155, regulationB - shift));
+    }
+  }
+
   var qScoresA = splitRegulationScore(regulationA);
   var qScoresB = splitRegulationScore(regulationB);
   var scoreA = regulationA;
@@ -6605,6 +6654,7 @@ function simulate82StyleMatchup(teamA, teamB, options) {
     keyEvents: keyEvents, ot: ot,
     teamA: { power: powerA }, teamB: { power: powerB },
     pace: pace, possPerQ: Math.round(pace / 4), expectedWinProb: expectedWinProb,
+    _userLine: _userLine, _userForm: _userForm,
     boxScore: options.includeBoxScore === false ? null : generateBoxScore(teamA, teamB, scoreA, scoreB)
   };
 }
@@ -6902,6 +6952,11 @@ function syncUserStatsIntoBoxScore(gameResult, stats) {
 
 /** 生成你的球员数据：分钟、球权、出手类型和每项数据分别由对应属性驱动。 */
 function generatePlayerStatsNew(attrs, gameResult, isPlayoff) {
+  // 大乱斗：胜负判定阶段已按这套数据算过“你的发挥影响”，这里直接复用，保证战报与胜负一致
+  if (gameResult && gameResult._userLine && attrs === STATE.attrs) {
+    syncUserStatsIntoBoxScore(gameResult, gameResult._userLine);
+    return gameResult._userLine;
+  }
   const pos = STATE.position || 'PG';
   const pace = Number(gameResult && gameResult.pace) || 99.4;
   const mins = getPlayerRotationMinutes(attrs, pos, isPlayoff);
