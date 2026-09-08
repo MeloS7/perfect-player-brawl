@@ -3003,14 +3003,31 @@ function getRerollButtonHtml() {
     '</button>';
 }
 
-/** ⚡ Max随机按钮：自动随机球队 + 无限刷新，直到 OVR ≥ 目标值 */
+/** ⚡ Max随机：目标 OVR 输入框的当前值（在按钮重建时保持不丢） */
+var _maxRandomTargetInput = null;
+function getMaxRandomTargetInputValue() {
+  if (_maxRandomTargetInput == null) _maxRandomTargetInput = getMaxRandomTargetOvr();
+  return _maxRandomTargetInput;
+}
+function onMaxRandomTargetInput(el) {
+  var v = parseInt(el && el.value, 10);
+  if (isFinite(v)) _maxRandomTargetInput = Math.max(40, Math.min(99, v));
+}
+
+/** ⚡ Max随机按钮 + 目标 OVR 输入框：随机组建一个总评≈目标值的球员 */
 function getMaxRandomButtonHtml() {
   var running = !!window._maxRandomRunning;
-  return '<button class="btn btn-sm slot-btn" id="max-random-btn" onclick="maxRandomBuild()"' +
+  var target = getMaxRandomTargetInputValue();
+  var input = '<input type="number" id="max-random-ovr" value="' + target + '" min="40" max="99" step="1"' +
+    ' oninput="onMaxRandomTargetInput(this)" onclick="event.stopPropagation()" ' +
+    ' aria-label="目标总评" title="目标总评 OVR (40~99)"' +
+    ' style="width:46px;min-height:36px;padding:4px 4px;border-radius:8px;border:2px solid #c026d3;background:var(--bg-card);color:var(--text);font-family:var(--font-display);font-weight:700;font-size:12px;text-align:center;">';
+  var btn = '<button class="btn btn-sm slot-btn" id="max-random-btn" onclick="maxRandomBuild()"' +
     (running ? ' disabled' : '') +
     ' style="background:linear-gradient(135deg,#7b2ff7,#f107a3);color:#fff;border-color:#c026d3;' + (running ? 'opacity:0.5;' : '') + '">' +
-    (running ? '⏳ 随机中…' : '⚡ Max随机') +
+    (running ? '⏳ 随机中…' : '⚡ 随机到该总评') +
     '</button>';
+  return '<span style="display:inline-flex;gap:4px;align-items:center;">' + input + btn + '</span>';
 }
 
 function updateSlotButtons() {
@@ -3316,6 +3333,13 @@ function _collectMaxRandomPools() {
 function maxRandomBuild() {
   if (window._maxRandomRunning) return;
   if (!STATE.position) { alert('请先选择我的位置'); return; }
+
+  var inputEl = document.getElementById('max-random-ovr');
+  var typed = parseInt(inputEl && inputEl.value, 10);
+  var target = isFinite(typed) ? Math.max(40, Math.min(99, typed)) : getMaxRandomTargetInputValue();
+  _maxRandomTargetInput = target;
+  if (inputEl) inputEl.value = target;
+
   window._maxRandomRunning = true;
   updateSlotButtons();
   var btn = document.getElementById('max-random-btn');
@@ -3323,10 +3347,10 @@ function maxRandomBuild() {
   // 让按钮状态先渲染出来，再跑重活
   setTimeout(function() {
     try {
-      _runMaxRandom();
+      _runMaxRandom(target);
     } catch (e) {
       console.error('[MaxRandom] 失败:', e);
-      alert('Max随机出错：' + (e && e.message ? e.message : e));
+      alert('随机组建出错：' + (e && e.message ? e.message : e));
     } finally {
       window._maxRandomRunning = false;
       updateSlotButtons();
@@ -3334,8 +3358,77 @@ function maxRandomBuild() {
   }, 30);
 }
 
-function _runMaxRandom() {
-  var TARGET_OVR = getMaxRandomTargetOvr();
+/** 随机搜一名“该属性调整后 ≈ wantVal”的球员（按真实跨位置衰减） */
+function _searchAttrValue(byTeam, teamList, pos, key, wantVal, maxDraws) {
+  var closest = null;
+  for (var d = 0; d < maxDraws; d++) {
+    var team = teamList[Math.floor(Math.random() * teamList.length)];
+    var roster = byTeam[team];
+    var draw = shuffleArr(roster.slice()).slice(0, Math.min(5, roster.length));
+    for (var i = 0; i < draw.length; i++) {
+      var p = draw[i];
+      var raw = parseInt(p[key]) || 50;
+      var srcPos = getPlayerMainPos(p);
+      var penalty = getPosPenalty(pos, srcPos, key);
+      var adj = Math.min(99, Math.round(raw * penalty));
+      if (!closest || Math.abs(adj - wantVal) < Math.abs(closest.adj - wantVal)) {
+        closest = { adj: adj, raw: raw, penalty: penalty, team: team, player: p, srcPos: srcPos, relaxed: false };
+      }
+    }
+    if (closest && Math.abs(closest.adj - wantVal) <= 1) break;
+  }
+  return closest;
+}
+
+function _pickToRow(key, k) {
+  return {
+    key: key,
+    cn: (typeof attrCN === 'function' ? attrCN(key) : key),
+    team: k.team,
+    teamCn: (typeof getTeamName === 'function' ? getTeamName(k.team) : k.team),
+    playerCn: k.player.cname || k.player.name,
+    srcPos: k.srcPos,
+    raw: k.raw,
+    adj: k.adj,
+    penalty: k.penalty,
+    relaxed: !!k.relaxed,
+    historical: k.player._sourceKind === 'historical'
+  };
+}
+
+function _commitMaxRandom(pos, pickByKey, info) {
+  var attrs = {}, slots = {}, rows = [];
+  ATTR_KEYS.forEach(function(key) {
+    var k = pickByKey[key];
+    attrs[key] = k.adj;
+    slots[key] = { player: k.player.name, team: k.team, value: k.adj, raw: k.raw, penalty: k.penalty };
+    rows.push(_pickToRow(key, k));
+  });
+  STATE.attrs = attrs;
+  STATE.attrSlots = slots;
+  STATE.lockedCount = 13;
+  STATE.usedPlayers = rows.map(function(x) { return x.playerCn; });
+  STATE.currentTeam = rows[rows.length - 1].team;
+  STATE.selectedPlayer = null;
+  STATE._mustLockAfterSpin = false;
+  STATE._locking = false;
+  var ovr = calcOVR(attrs, pos);
+  STATE._maxRandomInfo = Object.assign({
+    ovr: ovr,
+    hit: ovr >= info.target || Math.abs(ovr - info.target) <= 1,
+    picks: rows,
+    relaxed: rows.some(function(x) { return x.relaxed; })
+  }, info);
+
+  try { console.table(rows.map(function(x) {
+    return { 属性: x.cn, 值: x.adj, 来源球队: x.teamCn, 来源球员: x.playerCn, 原始: x.raw, 位置: x.srcPos, 历史卡: x.historical, 放宽: x.relaxed };
+  })); } catch (e) {}
+
+  _showMaxRandomResult(STATE._maxRandomInfo);
+}
+
+function _runMaxRandom(TARGET_OVR) {
+  if (!(TARGET_OVR >= 40 && TARGET_OVR <= 99)) TARGET_OVR = getMaxRandomTargetOvr();
   var MAX_ATTEMPTS = 400;      // 最多做多少次“完整 13 项随机”
   var DRAWS_PER_ATTR = 80;     // 每项属性最多随机抽多少次（球队 + 一批 5 人）
   var PER_ATTR_STOP = 99;      // 单项调整后达到就收手（99 封顶）
@@ -3345,25 +3438,23 @@ function _runMaxRandom() {
   if (!teamList.length) { alert('球员池还没加载完，请稍等两秒再试'); return; }
 
   var pos = STATE.position;
-  var best = null;
+
+  // ============ 阶段 A：贪心冲到能达到的最高总评 ============
+  var best = null;      // { ovr, pickByKey, penaltyFloor }
   var attempts = 0;
   var totalRerolls = 0;
 
   while (attempts < MAX_ATTEMPTS) {
     attempts++;
-    // 分阶段放宽跨位置衰减：前 40% 纯随机按真实规则；
-    // 还没达标就逐步抬高衰减下限，最后阶段直接无视跨位置损失，确保能冲到目标。
+    // 分阶段放宽跨位置衰减：前 40% 按真实规则；还冲不到目标就逐步抬高下限。
     var progress = attempts / MAX_ATTEMPTS;
     var penaltyFloor = progress < 0.4 ? 0 : (progress < 0.7 ? 0.90 : 1.0);
 
-    var attrs = {};
-    var slots = {};
-    var picks = [];
-
+    var pickByKey = {};
     for (var ai = 0; ai < ATTR_KEYS.length; ai++) {
       var key = ATTR_KEYS[ai];
       var bestForKey = null;
-      for (var d = 0; d < DRAWS_PER_ATTR; d++) {
+      for (var dd = 0; dd < DRAWS_PER_ATTR; dd++) {
         totalRerolls++;
         var team = teamList[Math.floor(Math.random() * teamList.length)];
         var roster = byTeam[team];
@@ -3377,7 +3468,7 @@ function _runMaxRandom() {
           var adj = Math.min(99, Math.round(raw * penalty));
           if (!bestForKey || adj > bestForKey.adj) {
             bestForKey = {
-              adj: adj, raw: raw, penalty: penalty, naturalPenalty: naturalPenalty,
+              adj: adj, raw: raw, penalty: penalty,
               relaxed: penalty > naturalPenalty + 0.001,
               team: team, player: p, srcPos: srcPos
             };
@@ -3385,51 +3476,49 @@ function _runMaxRandom() {
         }
         if (bestForKey && bestForKey.adj >= PER_ATTR_STOP) break;
       }
-      attrs[key] = bestForKey.adj;
-      slots[key] = {
-        player: bestForKey.player.name, team: bestForKey.team,
-        value: bestForKey.adj, raw: bestForKey.raw, penalty: bestForKey.penalty
-      };
-      picks.push({
-        key: key,
-        cn: (typeof attrCN === 'function' ? attrCN(key) : key),
-        team: bestForKey.team,
-        teamCn: (typeof getTeamName === 'function' ? getTeamName(bestForKey.team) : bestForKey.team),
-        playerCn: bestForKey.player.cname || bestForKey.player.name,
-        srcPos: bestForKey.srcPos,
-        raw: bestForKey.raw,
-        adj: bestForKey.adj,
-        penalty: bestForKey.penalty,
-        relaxed: bestForKey.relaxed,
-        historical: bestForKey.player._sourceKind === 'historical'
-      });
+      pickByKey[key] = bestForKey;
     }
 
-    var ovr = calcOVR(attrs, pos);
-    if (!best || ovr > best.ovr) best = { ovr: ovr, attrs: attrs, slots: slots, picks: picks, penaltyFloor: penaltyFloor };
-    if (ovr >= TARGET_OVR) break;
+    var attrsA = {};
+    ATTR_KEYS.forEach(function(k) { attrsA[k] = pickByKey[k].adj; });
+    var ovrA = calcOVR(attrsA, pos);
+    if (!best || ovrA > best.ovr) best = { ovr: ovrA, pickByKey: pickByKey, penaltyFloor: penaltyFloor };
+    if (ovrA >= TARGET_OVR) break;
   }
 
-  // 提交为已锁定的建球员结果
-  STATE.attrs = best.attrs;
-  STATE.attrSlots = best.slots;
-  STATE.lockedCount = 13;
-  STATE.usedPlayers = best.picks.map(function(x) { return x.playerCn; });
-  STATE.currentTeam = best.picks[best.picks.length - 1].team;
-  STATE.selectedPlayer = null;
-  STATE._mustLockAfterSpin = false;
-  STATE._locking = false;
-  STATE._maxRandomInfo = {
-    target: TARGET_OVR, ovr: best.ovr, hit: best.ovr >= TARGET_OVR,
-    attempts: attempts, rerolls: totalRerolls, picks: best.picks,
-    relaxed: (best.penaltyFloor || 0) > 0 && best.picks.some(function(x) { return x.relaxed; })
-  };
+  // 达不到目标（数据/位置上限），直接交这份最高的
+  if (best.ovr <= TARGET_OVR + 1) {
+    _commitMaxRandom(pos, best.pickByKey, {
+      target: TARGET_OVR, attempts: attempts, rerolls: totalRerolls,
+      mode: best.ovr >= TARGET_OVR ? 'reach' : 'capped'
+    });
+    return;
+  }
 
-  try { console.table(best.picks.map(function(x) {
-    return { 属性: x.cn, 值: x.adj, 来源球队: x.teamCn, 来源球员: x.playerCn, 原始: x.raw, 位置: x.srcPos, 历史卡: x.historical };
-  })); } catch (e) {}
+  // ============ 阶段 B：把总评“降配”到 ≈ 目标 ============
+  // 权重和为 1，全属性统一下调 r 点 → 总评降 r 点。
+  var detunePicks = {};
+  var DETUNE_DRAWS = 70;
+  for (var pass = 0; pass < 2; pass++) {
+    var baseAttrs = {};
+    ATTR_KEYS.forEach(function(k) {
+      baseAttrs[k] = pass === 0 ? best.pickByKey[k].adj : detunePicks[k].adj;
+    });
+    var curOvr = calcOVR(baseAttrs, pos);
+    var r = curOvr - TARGET_OVR;
+    if (Math.abs(r) <= 1) break;
+    ATTR_KEYS.forEach(function(key) {
+      var wantVal = Math.max(25, Math.min(99, Math.round(baseAttrs[key] - r)));
+      totalRerolls += DETUNE_DRAWS;
+      var found = _searchAttrValue(byTeam, teamList, pos, key, wantVal, DETUNE_DRAWS);
+      detunePicks[key] = found || best.pickByKey[key];
+    });
+  }
 
-  _showMaxRandomResult(STATE._maxRandomInfo);
+  _commitMaxRandom(pos, detunePicks, {
+    target: TARGET_OVR, attempts: attempts, rerolls: totalRerolls, mode: 'detuned',
+    ceiling: best.ovr
+  });
 }
 
 function _showMaxRandomResult(info) {
@@ -3446,10 +3535,16 @@ function _showMaxRandomResult(info) {
     '</div>';
   }).join('');
 
-  var head = (info.hit ? '✅ OVR ' + info.ovr + '（已达标 ≥ ' + info.target + '）'
-                       : '⚠️ OVR ' + info.ovr + '（' + info.attempts + ' 次仍未达 ' + info.target + '，已取最高一次）');
+  var head;
+  if (info.mode === 'detuned') {
+    head = '🎯 OVR ' + info.ovr + '（目标 ' + info.target + '，已按目标降配；可冲到 ' + info.ceiling + '）';
+  } else if (info.mode === 'capped') {
+    head = '⚠️ OVR ' + info.ovr + '（目标 ' + info.target + '，' + info.attempts + ' 次已尽力，数据上限）';
+  } else {
+    head = '✅ OVR ' + info.ovr + '（目标 ' + info.target + '，已达标）';
+  }
 
-  var relaxNote = info.relaxed
+  var relaxNote = (info.relaxed && info.mode !== 'detuned')
     ? '<div style="font-size:11px;color:var(--gold);margin-bottom:6px;">⚙️ 为冲上目标，部分属性已放宽「跨位置衰减」（下方标 ⚡）</div>'
     : '';
 
@@ -3460,7 +3555,7 @@ function _showMaxRandomResult(info) {
 
   if (typeof showEventModal === 'function') {
     showEventModal({
-      emoji: '⚡', title: 'Max随机结果', body: body, btnText: '揭晓球员'
+      emoji: '⚡', title: '随机组建结果', body: body, btnText: '揭晓球员'
     }, function() {
       if (typeof revealPlayer === 'function') revealPlayer();
     });

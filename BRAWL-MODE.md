@@ -2,25 +2,36 @@
 
 在上游 `zyz9408/perfect-player` 基础上新增的自定义内容。分支：`brawl`（从 `base` = pinned commit `efca6764` 拉出）。
 
-## ⚡ Max随机（建球员一键最优）
+## ⚡ 随机组建到指定总评
 
-建球员界面「🎲 随机球队 / 👥 更换球员」旁边新增紫粉色按钮 **「⚡ Max随机」**。
+建球员界面「🎲 随机球队 / 👥 更换球员」旁边新增 **一个数字输入框（默认 97）+ 紫粉色按钮「⚡ 随机到该总评」**。
 
-点一下就会：
-1. 自动扫描全部 30 队的建球员候选池（现役 + 历史惊喜卡）
-2. 对 13 项属性各自反复随机「抽球队 → 抽一批 5 人」，每项都留下调整后最高的一个
-3. 算总评；没到目标（默认 **OVR ≥ 97**，见 `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR`）就整套重刷，最多 400 次
-4. 还刷不到就分阶段放宽「跨位置衰减」（40% 后下限 0.90，70% 后完全无视），确保能冲上目标
-5. 弹窗汇报结果：最终 OVR、是否达标、随机了多少次、以及每项属性来自哪支球队的哪名球员（★ = 历史卡，⚡ = 该项放宽了跨位置衰减，`(原 99×0.90)` = 衰减明细）。控制台另有 `console.table` 完整表格
-6. 点「揭晓球员」进入正常的揭幕页
+在框里填任意目标总评（40~99），点按钮：
 
-实测：PG / SG / PF / C 基本第 1 次随机就能到 97~98；SF 因为权重分散在内防/篮板，会触发放宽后到 97。整个过程 < 1 秒。
+1. 扫描全部 30 队的建球员候选池（现役 + 历史惊喜卡）
+2. **阶段 A（冲高）**：13 项属性各自反复随机「抽球队 → 抽一批 5 人」，每项留下调整后最高的；算总评，没到目标就整套重刷（最多 400 次），还不到就分阶段放宽「跨位置衰减」（40% 后下限 0.90，70% 后完全无视），把总评顶到能达到的最高值
+3. **阶段 B（降配）**：如果最高值比目标还高（填 85、75 这种就会），按「权重和为 1」的原理把 13 项统一下调 `最高OVR − 目标` 点，再为每一项随机搜一名「该属性 ≈ 目标值」的真实球员，落到目标 ±1
+4. 弹窗汇报：
+   - `✅ OVR 97（目标 97，已达标）` — 直接冲到
+   - `🎯 OVR 85（目标 85，已按目标降配；可冲到 97）` — 走了降配
+   - `⚠️ OVR 96（目标 99，数据上限）` — 目标太高，尽力了
+   - 下面逐项列出：等级、值、来自哪支球队的哪名球员（★ 历史卡，⚡ 放宽了跨位置衰减，`(原 99×0.90)` 衰减明细）。控制台另有 `console.table`
+5. 点「揭晓球员」进正常揭幕页
 
-**参数**：`assets/js/config.js` → `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR`（默认 97，范围 60~99）。控制台可热改，例如 `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR = 99`。
+**实测**（都 < 0.3 秒，`hit=true`）：
 
-**实现**：`nba-perfect-player.html` 内 `maxRandomBuild()` / `_runMaxRandom()` / `_showMaxRandomResult()` / `_collectMaxRandomPools()` / `getMaxRandomButtonHtml()`（就在 `rerollTeamPlayers` 下方）。按钮注入在 `updateSlotButtons()` 和 `buildSlotHTML()`。
+| 位置 · 目标 | 结果 | 方式 |
+|---|---|---|
+| PG 97 | OVR 97 | 冲高（第 1 次） |
+| SF 99 | OVR 99 | 冲高 + 放宽衰减（~280 次） |
+| PG 85 / SG 75 / C 90 | OVR 84 / 75 / 90 | 降配 |
+| PF 60 | OVR 62 | 降配（属性有下限，压不到 60） |
 
-> 说明：Max随机的候选池**始终**包含历史惊喜卡（不管是否大乱斗模式），这样才好稳定冲到 97。想只用现役球员来 Max随机，跟我说一声改一行即可。
+**默认值**：`assets/js/config.js` → `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR`（输入框的初始值，默认 97）。输入框里改的目标只对当次生效。
+
+**实现**：`nba-perfect-player.html` 内 `maxRandomBuild()`（读输入框）/ `_runMaxRandom(target)`（阶段 A+B）/ `_searchAttrValue()` / `_commitMaxRandom()` / `_showMaxRandomResult()` / `_collectMaxRandomPools()` / `getMaxRandomButtonHtml()`（`rerollTeamPlayers` 下方）。输入框+按钮注入在 `updateSlotButtons()` 和 `buildSlotHTML()`；`_maxRandomTargetInput` 保证按钮区重建时输入值不丢。
+
+> 说明：候选池**始终**包含历史惊喜卡（不管是否大乱斗模式），这样高目标才稳。想「非大乱斗时只用现役球员」跟我说，改 `_collectMaxRandomPools` 一行即可。
 
 ---
 
