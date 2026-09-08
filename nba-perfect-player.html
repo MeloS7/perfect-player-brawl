@@ -4587,7 +4587,7 @@ function renderCareerTeamReveal(team, cnName, role, rosterHtml) {
         <div style="position:absolute;top:8px;left:8px;">${getTeamLogo(team, 32)}</div>
         <div style="font-size:13px;color:var(--text-dim);">${getCurrentSeasonLabel()} · 我的生涯球队${draftLine}</div>
         <div style="font-size:24px;font-weight:800;margin:6px 0;font-family:var(--font-display);letter-spacing:2px;">${cnName}</div>
-        <div style="font-size:12px;color:var(--text-dim);">我担任的角色为${finalRole}${SIM_CONFIG.POSITIONS[STATE.position]}</div>
+        <div style="font-size:12px;color:var(--text-dim);">我担任的角色为${finalRole}${userPosCn()}</div>
         <div style="margin-top:12px;">
           <button class="btn btn-primary" onclick="trackEvent({act:'click',blk:'BMC098',pos:'TC7',label:'开始赛季'});startSeason()">🏀 开始赛季</button>
         </div>
@@ -4736,7 +4736,9 @@ function selectCareerTeam(team) {
   
   function renderRosterPlayer(p, isUser, idx) {
     var pOvr = parseInt(p.ovr) || 0;
-    var pPos = p.posCn || p.pos || '—';
+    var pPos = isUser
+      ? ((STATE.season && STATE.season._userLineupPos) || STATE.position || (p.posCn || p.pos || '—'))
+      : (p.posCn || p.pos || '—');
     var pName = p.cname || p.name;
     var imgHtml;
     if (isUser) {
@@ -5066,7 +5068,7 @@ function startSeason() {
       '<div class="sh-record" id="simRecord"><span class="sh-wins">0</span><span class="sh-dash">-</span><span class="sh-losses">0</span><div class="sh-pct">—</div></div>' +
     '</div>' +
     '<div class="sh-info" id="simInfo">' +
-      '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+      '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
       '<span>场均 0分 0板 0助</span>' +
       '<span id="simStreak"></span>' +
     '</div>' +
@@ -5122,7 +5124,7 @@ function quickSimAllGames() {
       var fAst = Math.round(psFinal.ast / gpFinal * 10) / 10;
       var finfo = document.getElementById('simInfo');
       if (finfo) {
-        finfo.innerHTML = '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+        finfo.innerHTML = '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
           '<span>场均 ' + fPts + '分 ' + fReb + '板 ' + fAst + '助</span>' +
           '<span>' + (STATE.season.standings[STATE.careerTeam]?.streakLen > 0 ? (STATE.season.standings[STATE.careerTeam]?.streak === 'W' ? 'W' : 'L') + (STATE.season.standings[STATE.careerTeam]?.streakLen || '') : '') + '</span>';
       }
@@ -5173,7 +5175,7 @@ function quickSimAllGames() {
             '<div class="bv-po-stat"><span class="bv-po-val">' + aTov + '</span><span class="bv-po-lbl">失误</span></div>' +
           '</div>' +
           '<div style="text-align:center;font-size:11px;color:var(--text-dim);margin-top:4px;">' +
-            '出战 ' + gp + ' 场 · OVR ' + STATE.finalOVR + ' · ' + SIM_CONFIG.POSITIONS[STATE.position] +
+            '出战 ' + gp + ' 场 · OVR ' + STATE.finalOVR + ' · ' + userPosCn() +
           '</div>' +
         '</div>';
 
@@ -5252,7 +5254,7 @@ function quickSimAllGames() {
           if (info3) {
             var ps3 = STATE.season.playerStats;
             var gp3 = ps3.games || 1;
-            info3.innerHTML = '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+            info3.innerHTML = '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
               '<span>场均 ' + Math.round(ps3.pts / gp3 * 10) / 10 + '分 ' + Math.round(ps3.reb / gp3 * 10) / 10 + '板 ' + Math.round(ps3.ast / gp3 * 10) / 10 + '助</span>' +
               '<span>' + (STATE.season.standings[STATE.careerTeam]?.streakLen > 0 ? (STATE.season.standings[STATE.careerTeam]?.streak === 'W' ? 'W' : 'L') + (STATE.season.standings[STATE.careerTeam]?.streakLen || '') : '') + '</span>';
           }
@@ -5295,7 +5297,7 @@ function quickSimAllGames() {
           var infoH = document.getElementById('simInfo');
           if (infoH) {
             var gpH = psH.games || 1;
-            infoH.innerHTML = '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+            infoH.innerHTML = '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
               '<span>场均 ' + Math.round(psH.pts / gpH * 10) / 10 + '分 ' + Math.round(psH.reb / gpH * 10) / 10 + '板 ' + Math.round(psH.ast / gpH * 10) / 10 + '助</span>' +
               '<span>' + (STATE.season.standings[STATE.careerTeam]?.streakLen > 0 ? (STATE.season.standings[STATE.careerTeam]?.streak === 'W' ? 'W' : 'L') + (STATE.season.standings[STATE.careerTeam]?.streakLen || '') : '') + '</span>';
           }
@@ -5374,7 +5376,7 @@ function quickSimAllGames() {
       var avgAst2 = Math.round(ps2.ast / gp2 * 10) / 10;
       var info = document.getElementById('simInfo');
       if (info) {
-        info.innerHTML = '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+        info.innerHTML = '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
           '<span>场均 ' + avgPts2 + '分 ' + avgReb2 + '板 ' + avgAst2 + '助</span>' +
           '<span>' + (STATE.season.standings[STATE.careerTeam]?.streakLen > 0 ? (STATE.season.standings[STATE.careerTeam]?.streak === 'W' ? 'W' : 'L') + (STATE.season.standings[STATE.careerTeam]?.streakLen || '') : '') + '</span>';
       }
@@ -6179,7 +6181,7 @@ function renderDotGrid() {
       '<div class="sh-record"><span class="sh-wins">' + w + '</span><span class="sh-dash">-</span><span class="sh-losses">' + l + '</span><div class="sh-pct">' + pct + '</div></div>' +
     '</div>' +
     '<div class="sh-info" id="simInfo2">' +
-      '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+      '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
       '<span>' + (function(){ var ps=STATE.season.playerStats,g=ps.games||1; return '场均 ' + Math.round(ps.pts/g*10)/10 + '分 ' + Math.round(ps.reb/g*10)/10 + '板 ' + Math.round(ps.ast/g*10)/10 + '助'; })() + '</span>' +
     '</div>' +
     renderEventStatus() +
@@ -6295,6 +6297,22 @@ function getPositionDisplay(posStr) {
   return posStr;
 }
 
+/** 自建球员的位置串（"PG" 或 "PG / SG"），用于阵容判定：两个位置都算能打 */
+function getUserPositionsString() {
+  return (typeof getUserPositions === 'function' ? getUserPositions() : [STATE.position || 'SF']).join(' / ');
+}
+
+/** 自建球员当前在阵容里实际打的位置中文（双位置时把当前所打的放在前面） */
+function userPosCn() {
+  var sel = [STATE.position, STATE.position2].filter(function(p) { return p && SIM_CONFIG.POSITIONS[p]; });
+  var slot = STATE.season && STATE.season._userLineupPos;
+  if (sel.length < 2) return SIM_CONFIG.POSITIONS[STATE.position] || STATE.position || '—';
+  var order = (slot && sel.indexOf(slot) >= 0)
+    ? [slot].concat(sel.filter(function(p) { return p !== slot; }))
+    : sel;
+  return order.map(function(p) { return SIM_CONFIG.POSITIONS[p]; }).join(' / ');
+}
+
 /** 按位置计算球队首发+轮换（用户参与规划；未首发则第六人） */
 function calcTeamLineup(team) {
   const allPlayers = (NBA2K_DATA[team] || []).slice();
@@ -6310,12 +6328,17 @@ function calcTeamLineup(team) {
     rosterSig,
     STATE.careerTeam || '',
     STATE.position || '',
+    STATE.position2 || '',
     STATE.finalOVR || '',
     careerEffects.lineupBonus || 0,
     STATE.season?.isPlayoffs ? 'po' : 'rs'
   ].join('||');
   STATE._lineupCache = STATE._lineupCache || {};
-  if (STATE._lineupCache[lineupCacheKey]) return STATE._lineupCache[lineupCacheKey];
+  if (STATE._lineupCache[lineupCacheKey]) {
+    var _cached = STATE._lineupCache[lineupCacheKey];
+    if (team === STATE.careerTeam && STATE.season && _cached.userPos) STATE.season._userLineupPos = _cached.userPos;
+    return _cached;
+  }
   
   // 如果是你的球队，把你加入阵容
   if (team === STATE.careerTeam && STATE.finalOVR) {
@@ -6326,7 +6349,7 @@ function calcTeamLineup(team) {
       cname: _displayName,
       ovr: Math.max(60, parseInt(STATE.finalOVR) - playoffDebuff),
       _lineupOvr: Math.max(60, parseInt(STATE.finalOVR) - playoffDebuff + (careerEffects.lineupBonus || 0)),
-      pos: STATE.position,
+      pos: getUserPositionsString(),   // 双位置：两个位置都可被排进首发
       ...STATE.attrs,
       _isUser: true,
       _playoffDebuff: playoffDebuff,
@@ -6405,6 +6428,16 @@ function calcTeamLineup(team) {
   }
   
   var result = { starters, bench, allPlayers, isUserStarter: !!(userPlayer && Object.values(starters).indexOf(userPlayer) >= 0) };
+
+  // 记录自建球员实际被排进的位置槽（双位置自动切换的结果）
+  if (userPlayer) {
+    var _userSlot = null;
+    POS_ORDER.forEach(function(pos) { if (starters[pos] === userPlayer) _userSlot = pos; });
+    if (!_userSlot) _userSlot = STATE.position;   // 打替补时按主位置
+    result.userPos = _userSlot;
+    if (team === STATE.careerTeam && STATE.season) STATE.season._userLineupPos = _userSlot;
+  }
+
   STATE._lineupCache[lineupCacheKey] = result;
   return result;
 }
@@ -7275,7 +7308,7 @@ function renderSeasonUI() {
       </div>
     </div>
     <div class="sh-info">
-      <span>${SIM_CONFIG.POSITIONS[STATE.position]} · OVR ${STATE.finalOVR}</span>
+      <span>${userPosCn()} · OVR ${STATE.finalOVR}</span>
       <span>场均 ${avg.pts}分 ${avg.reb}板 ${avg.ast}助</span>
       <span>${last5Html ? '最近: ' + last5Html : ''} ${streakStr}</span>
     </div>
@@ -9408,7 +9441,7 @@ function showSeasonResults() {
       <div class="sr-section">
         <div class="sr-section-title">👤 我的球员信息</div>
         <div class="sr-info-row">
-          <span>位置</span><span>${SIM_CONFIG.POSITIONS[STATE.position]}</span>
+          <span>位置</span><span>${userPosCn()}</span>
         </div>
         <div class="sr-info-row">
           <span>总评</span><span class="sr-ovr">${STATE.finalOVR}</span>
@@ -9578,7 +9611,7 @@ function renderMyCard(isFinal) {
   html('mycard-content').innerHTML = `
     <div class="mycard">
       <div class="mc-header">
-        <div class="mc-pos">${SIM_CONFIG.POSITIONS[STATE.position]}</div>
+        <div class="mc-pos">${userPosCn()}</div>
         <div class="mc-name">${getHupuDisplayName()}</div>
         <div class="mc-ovr-row">
           <span class="mc-ovr">${STATE.finalOVR}</span>
@@ -10720,12 +10753,13 @@ function recordBranchChoice(ev, ch, msg, phase) {
   markCareerEventSeen(ev, c);
 }
 
+var _EVT_TUNING = (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.SEASON && SIM_CONFIG.SEASON.EVENTS_TUNING) || {};
 var SEASON_BRANCH_EVENT_CONFIG = {
-  chancePercent: 14,
-  cooldownGames: 7,
-  maxPerSeason: 5,
-  maxWithRelationship: 5,
-  openingGames: 12,
+  chancePercent: _EVT_TUNING.NARRATIVE_CHANCE_PERCENT != null ? _EVT_TUNING.NARRATIVE_CHANCE_PERCENT : 14,
+  cooldownGames: _EVT_TUNING.NARRATIVE_COOLDOWN_GAMES != null ? _EVT_TUNING.NARRATIVE_COOLDOWN_GAMES : 7,
+  maxPerSeason: _EVT_TUNING.NARRATIVE_MAX_PER_SEASON != null ? _EVT_TUNING.NARRATIVE_MAX_PER_SEASON : 5,
+  maxWithRelationship: _EVT_TUNING.NARRATIVE_MAX_WITH_RELATIONSHIP != null ? _EVT_TUNING.NARRATIVE_MAX_WITH_RELATIONSHIP : 5,
+  openingGames: _EVT_TUNING.NARRATIVE_OPENING_GAMES != null ? _EVT_TUNING.NARRATIVE_OPENING_GAMES : 12,
   noRepeatCareer: true
 };
 
@@ -19157,7 +19191,7 @@ function renderSeasonScreenDOM() {
       '<div class="sh-record" id="simRecord"><span class="sh-wins">0</span><span class="sh-dash">-</span><span class="sh-losses">0</span><div class="sh-pct">—</div></div>' +
     '</div>' +
     '<div class="sh-info" id="simInfo">' +
-      '<span>' + SIM_CONFIG.POSITIONS[STATE.position] + ' · OVR ' + STATE.finalOVR + '</span>' +
+      '<span>' + userPosCn() + ' · OVR ' + STATE.finalOVR + '</span>' +
       '<span>场均 0分 0板 0助</span>' +
       '<span id="simStreak"></span>' +
     '</div>' +
@@ -20664,10 +20698,16 @@ function getAgeBasedInjuryRate() {
   return 4.5;
 }
 
+function _evtTuning() {
+  return (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.SEASON && SIM_CONFIG.SEASON.EVENTS_TUNING) || {};
+}
+
 function getSeasonInjuryEventRate() {
   var ev = STATE.season && STATE.season.events;
   var bonus = ev && ev.injuryRiskBonus ? ev.injuryRiskBonus : 0;
-  return Math.max(0, Math.min(12, getAgeBasedInjuryRate() + bonus));
+  var mult = Number(_evtTuning().INJURY_RATE_MULT);
+  if (!(mult >= 0)) mult = 1;
+  return Math.max(0, Math.min(12, (getAgeBasedInjuryRate() + bonus) * mult));
 }
 
 function getMajorInjuryEventRate() {
@@ -20679,7 +20719,9 @@ function getMajorInjuryEventRate() {
   else if (age >= 26) base = 0.7;
   var ev = STATE.season && STATE.season.events;
   var bonus = ev && ev.injuryRiskBonus ? ev.injuryRiskBonus : 0;
-  return Math.max(0.15, Math.min(3, base + bonus * 0.08));
+  var mult = Number(_evtTuning().INJURY_MAJOR_RATE_MULT);
+  if (!(mult >= 0)) mult = 1;
+  return Math.max(0.1, Math.min(3, (base + bonus * 0.08) * mult));
 }
 
 function isInjuryEventDef(e) {
@@ -20725,15 +20767,19 @@ function checkRandomEvents(game, result, stats) {
   ev.triggeredIds = Array.isArray(ev.triggeredIds) ? ev.triggeredIds : [];
   if (ev.suspensionGamesLeft > 0 || ev.injuryGamesLeft > 0) return null;
 
-  // 常规赛最多触发 3 个伤病/冲突事件（原 2，配合 10 场冷却保持分散）
-  if (!STATE.season.isPlayoffs && ev.storyTimeline.length >= 3) return null;
-  // 季后赛最多触发 2 个伤病事件
-  if (STATE.season.isPlayoffs && ev.playoffEventCount >= 2) return null;
+  var _et = _evtTuning();
+  var _maxReg = Number(_et.INJURY_MAX_REGULAR); if (!(_maxReg >= 0)) _maxReg = 3;
+  var _maxPo = Number(_et.INJURY_MAX_PLAYOFF); if (!(_maxPo >= 0)) _maxPo = 2;
+  var _cool = Number(_et.INJURY_COOLDOWN_GAMES); if (!(_cool >= 0)) _cool = 10;
 
-  // 冷却检查：距上次事件至少间隔 10 场
+  // 常规赛 / 季后赛伤病·冲突事件上限（由 SIM_CONFIG.SEASON.EVENTS_TUNING 控制）
+  if (!STATE.season.isPlayoffs && ev.storyTimeline.length >= _maxReg) return null;
+  if (STATE.season.isPlayoffs && ev.playoffEventCount >= _maxPo) return null;
+
+  // 冷却检查：距上次事件至少间隔 N 场
   if (ev.lastTriggerGameNum != null) {
     var gamesSince = STATE.season.games.length - ev.lastTriggerGameNum;
-    if (gamesSince < 10) return null;
+    if (gamesSince < _cool) return null;
   }
 
   _lastGameCtx = { game: game, result: result, stats: stats };

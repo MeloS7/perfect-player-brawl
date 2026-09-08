@@ -235,6 +235,33 @@ const SIM_CONFIG = {
 
     /** 季后赛晋级条件（胜场数） */
     PLAYOFF_WIN_REQUIRED: 4,
+
+    // ============================================================
+    // 赛季事件频率调控（数值越低，赛季里弹窗越少）
+    // ============================================================
+    EVENTS_TUNING: {
+      /** 剧情/日常事件：每场触发概率（%） */
+      NARRATIVE_CHANCE_PERCENT: 8,     // 原 14
+      /** 剧情事件：每赛季上限 */
+      NARRATIVE_MAX_PER_SEASON: 3,     // 原 5
+      /** 已有“关系线”时的每赛季上限 */
+      NARRATIVE_MAX_WITH_RELATIONSHIP: 3, // 原 5
+      /** 剧情事件冷却场次 */
+      NARRATIVE_COOLDOWN_GAMES: 10,    // 原 7
+      /** 开局保证出一条日常的窗口（前 N 场）；设 0 关闭开局保底 */
+      NARRATIVE_OPENING_GAMES: 8,      // 原 12
+
+      /** 伤病事件概率倍率 */
+      INJURY_RATE_MULT: 0.6,
+      /** 重伤事件概率倍率 */
+      INJURY_MAJOR_RATE_MULT: 0.6,
+      /** 常规赛伤病/冲突事件每赛季上限 */
+      INJURY_MAX_REGULAR: 2,           // 原 3
+      /** 季后赛伤病事件上限 */
+      INJURY_MAX_PLAYOFF: 1,           // 原 2
+      /** 伤病事件冷却场次 */
+      INJURY_COOLDOWN_GAMES: 14,       // 原 10
+    },
   },
 
   /** 球队实力维度权重 */
