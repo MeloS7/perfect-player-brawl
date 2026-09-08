@@ -1,8 +1,30 @@
-# 大乱斗模式（Brawl Mode）
+# 大乱斗模式（Brawl Mode）+ Max随机
 
-在上游 `zyz9408/perfect-player` 基础上新增的自定义模式。分支：`brawl`（从 `base` = pinned commit `efca6764` 拉出）。
+在上游 `zyz9408/perfect-player` 基础上新增的自定义内容。分支：`brawl`（从 `base` = pinned commit `efca6764` 拉出）。
 
-## 做了两件事
+## ⚡ Max随机（建球员一键最优）
+
+建球员界面「🎲 随机球队 / 👥 更换球员」旁边新增紫粉色按钮 **「⚡ Max随机」**。
+
+点一下就会：
+1. 自动扫描全部 30 队的建球员候选池（现役 + 历史惊喜卡）
+2. 对 13 项属性各自反复随机「抽球队 → 抽一批 5 人」，每项都留下调整后最高的一个
+3. 算总评；没到目标（默认 **OVR ≥ 97**，见 `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR`）就整套重刷，最多 400 次
+4. 还刷不到就分阶段放宽「跨位置衰减」（40% 后下限 0.90，70% 后完全无视），确保能冲上目标
+5. 弹窗汇报结果：最终 OVR、是否达标、随机了多少次、以及每项属性来自哪支球队的哪名球员（★ = 历史卡，⚡ = 该项放宽了跨位置衰减，`(原 99×0.90)` = 衰减明细）。控制台另有 `console.table` 完整表格
+6. 点「揭晓球员」进入正常的揭幕页
+
+实测：PG / SG / PF / C 基本第 1 次随机就能到 97~98；SF 因为权重分散在内防/篮板，会触发放宽后到 97。整个过程 < 1 秒。
+
+**参数**：`assets/js/config.js` → `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR`（默认 97，范围 60~99）。控制台可热改，例如 `SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR = 99`。
+
+**实现**：`nba-perfect-player.html` 内 `maxRandomBuild()` / `_runMaxRandom()` / `_showMaxRandomResult()` / `_collectMaxRandomPools()` / `getMaxRandomButtonHtml()`（就在 `rerollTeamPlayers` 下方）。按钮注入在 `updateSlotButtons()` 和 `buildSlotHTML()`。
+
+> 说明：Max随机的候选池**始终**包含历史惊喜卡（不管是否大乱斗模式），这样才好稳定冲到 97。想只用现役球员来 Max随机，跟我说一声改一行即可。
+
+---
+
+## 大乱斗：做了两件事
 
 ### 1. 把 `SIM_CONFIG` 抽成独立文件
 

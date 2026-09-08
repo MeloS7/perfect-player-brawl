@@ -51,6 +51,9 @@ const SIM_CONFIG = {
     /** Classic 模式重roll次数 */
     CLASSIC_REROLLS: 3,
 
+    /** ⚡ Max随机：目标总评（自动随机刷新直到达到；60~99） */
+    MAX_RANDOM_TARGET_OVR: 97,
+
     /** 每支球队 roster 展示上限（不够的用实际人数） */
     ROSTER_SHOW_MAX: 15,
 

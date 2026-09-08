@@ -3003,6 +3003,16 @@ function getRerollButtonHtml() {
     '</button>';
 }
 
+/** ⚡ Max随机按钮：自动随机球队 + 无限刷新，直到 OVR ≥ 目标值 */
+function getMaxRandomButtonHtml() {
+  var running = !!window._maxRandomRunning;
+  return '<button class="btn btn-sm slot-btn" id="max-random-btn" onclick="maxRandomBuild()"' +
+    (running ? ' disabled' : '') +
+    ' style="background:linear-gradient(135deg,#7b2ff7,#f107a3);color:#fff;border-color:#c026d3;' + (running ? 'opacity:0.5;' : '') + '">' +
+    (running ? '⏳ 随机中…' : '⚡ Max随机') +
+    '</button>';
+}
+
 function updateSlotButtons() {
   const slotArea = document.getElementById('br-slot-area');
   if (!slotArea) return;
@@ -3021,6 +3031,7 @@ function updateSlotButtons() {
         🎲 随机球队
       </button>
       ${getRerollButtonHtml()}
+      ${getMaxRandomButtonHtml()}
     `;
   }
   if (warnEl) {
@@ -3048,6 +3059,7 @@ function buildSlotHTML(itemsHtml) {
           🎲 随机球队
         </button>
         ${getRerollButtonHtml()}
+        ${getMaxRandomButtonHtml()}
       </div>
       <div class="br-slot-warn" style="font-size:10px;color:var(--orange);margin-top:6px;min-height:16px;">${STATE._mustLockAfterSpin ? '⚠️ 先选择一名球员并锁定属性才能再次随机' : ''}</div>
     </div>
@@ -3278,6 +3290,183 @@ function rerollTeamPlayers() {
   renderLeftAttrs();
   updateSlotButtons();
   renderRosterPlayers(STATE.currentTeam, shown, players);
+}
+
+// ==================== ⚡ Max随机（自动最优建球员） ====================
+window._maxRandomRunning = false;
+
+function getMaxRandomTargetOvr() {
+  var v = (typeof SIM_CONFIG !== 'undefined' && SIM_CONFIG.BUILD && Number(SIM_CONFIG.BUILD.MAX_RANDOM_TARGET_OVR)) || 0;
+  return v >= 60 && v <= 99 ? v : 97;
+}
+
+/** 汇总每支球队的建球员候选池（现役 + 大乱斗历史卡） */
+function _collectMaxRandomPools() {
+  var teams = (typeof NBA2K_TEAMS !== 'undefined' ? NBA2K_TEAMS : []).slice();
+  var byTeam = {};
+  teams.forEach(function(t) {
+    var pool = (getBuildPlayerPool(t) || []).slice()
+      .concat(getBuildHistoricalSurprisePool(t) || [])
+      .filter(Boolean);
+    if (pool.length) byTeam[t] = pool;
+  });
+  return byTeam;
+}
+
+function maxRandomBuild() {
+  if (window._maxRandomRunning) return;
+  if (!STATE.position) { alert('请先选择我的位置'); return; }
+  window._maxRandomRunning = true;
+  updateSlotButtons();
+  var btn = document.getElementById('max-random-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 随机中…'; }
+  // 让按钮状态先渲染出来，再跑重活
+  setTimeout(function() {
+    try {
+      _runMaxRandom();
+    } catch (e) {
+      console.error('[MaxRandom] 失败:', e);
+      alert('Max随机出错：' + (e && e.message ? e.message : e));
+    } finally {
+      window._maxRandomRunning = false;
+      updateSlotButtons();
+    }
+  }, 30);
+}
+
+function _runMaxRandom() {
+  var TARGET_OVR = getMaxRandomTargetOvr();
+  var MAX_ATTEMPTS = 400;      // 最多做多少次“完整 13 项随机”
+  var DRAWS_PER_ATTR = 80;     // 每项属性最多随机抽多少次（球队 + 一批 5 人）
+  var PER_ATTR_STOP = 99;      // 单项调整后达到就收手（99 封顶）
+
+  var byTeam = _collectMaxRandomPools();
+  var teamList = Object.keys(byTeam);
+  if (!teamList.length) { alert('球员池还没加载完，请稍等两秒再试'); return; }
+
+  var pos = STATE.position;
+  var best = null;
+  var attempts = 0;
+  var totalRerolls = 0;
+
+  while (attempts < MAX_ATTEMPTS) {
+    attempts++;
+    // 分阶段放宽跨位置衰减：前 40% 纯随机按真实规则；
+    // 还没达标就逐步抬高衰减下限，最后阶段直接无视跨位置损失，确保能冲到目标。
+    var progress = attempts / MAX_ATTEMPTS;
+    var penaltyFloor = progress < 0.4 ? 0 : (progress < 0.7 ? 0.90 : 1.0);
+
+    var attrs = {};
+    var slots = {};
+    var picks = [];
+
+    for (var ai = 0; ai < ATTR_KEYS.length; ai++) {
+      var key = ATTR_KEYS[ai];
+      var bestForKey = null;
+      for (var d = 0; d < DRAWS_PER_ATTR; d++) {
+        totalRerolls++;
+        var team = teamList[Math.floor(Math.random() * teamList.length)];
+        var roster = byTeam[team];
+        var draw = shuffleArr(roster.slice()).slice(0, Math.min(5, roster.length));
+        for (var i = 0; i < draw.length; i++) {
+          var p = draw[i];
+          var raw = parseInt(p[key]) || 50;
+          var srcPos = getPlayerMainPos(p);
+          var naturalPenalty = getPosPenalty(pos, srcPos, key);
+          var penalty = Math.max(naturalPenalty, penaltyFloor);
+          var adj = Math.min(99, Math.round(raw * penalty));
+          if (!bestForKey || adj > bestForKey.adj) {
+            bestForKey = {
+              adj: adj, raw: raw, penalty: penalty, naturalPenalty: naturalPenalty,
+              relaxed: penalty > naturalPenalty + 0.001,
+              team: team, player: p, srcPos: srcPos
+            };
+          }
+        }
+        if (bestForKey && bestForKey.adj >= PER_ATTR_STOP) break;
+      }
+      attrs[key] = bestForKey.adj;
+      slots[key] = {
+        player: bestForKey.player.name, team: bestForKey.team,
+        value: bestForKey.adj, raw: bestForKey.raw, penalty: bestForKey.penalty
+      };
+      picks.push({
+        key: key,
+        cn: (typeof attrCN === 'function' ? attrCN(key) : key),
+        team: bestForKey.team,
+        teamCn: (typeof getTeamName === 'function' ? getTeamName(bestForKey.team) : bestForKey.team),
+        playerCn: bestForKey.player.cname || bestForKey.player.name,
+        srcPos: bestForKey.srcPos,
+        raw: bestForKey.raw,
+        adj: bestForKey.adj,
+        penalty: bestForKey.penalty,
+        relaxed: bestForKey.relaxed,
+        historical: bestForKey.player._sourceKind === 'historical'
+      });
+    }
+
+    var ovr = calcOVR(attrs, pos);
+    if (!best || ovr > best.ovr) best = { ovr: ovr, attrs: attrs, slots: slots, picks: picks, penaltyFloor: penaltyFloor };
+    if (ovr >= TARGET_OVR) break;
+  }
+
+  // 提交为已锁定的建球员结果
+  STATE.attrs = best.attrs;
+  STATE.attrSlots = best.slots;
+  STATE.lockedCount = 13;
+  STATE.usedPlayers = best.picks.map(function(x) { return x.playerCn; });
+  STATE.currentTeam = best.picks[best.picks.length - 1].team;
+  STATE.selectedPlayer = null;
+  STATE._mustLockAfterSpin = false;
+  STATE._locking = false;
+  STATE._maxRandomInfo = {
+    target: TARGET_OVR, ovr: best.ovr, hit: best.ovr >= TARGET_OVR,
+    attempts: attempts, rerolls: totalRerolls, picks: best.picks,
+    relaxed: (best.penaltyFloor || 0) > 0 && best.picks.some(function(x) { return x.relaxed; })
+  };
+
+  try { console.table(best.picks.map(function(x) {
+    return { 属性: x.cn, 值: x.adj, 来源球队: x.teamCn, 来源球员: x.playerCn, 原始: x.raw, 位置: x.srcPos, 历史卡: x.historical };
+  })); } catch (e) {}
+
+  _showMaxRandomResult(STATE._maxRandomInfo);
+}
+
+function _showMaxRandomResult(info) {
+  var rows = info.picks.map(function(x) {
+    var g = (typeof getGrade === 'function') ? getGrade(x.adj) : { letter: '', color: 'inherit' };
+    var pen = x.penalty < 1 ? ' <span style="color:var(--text-muted);">(原' + x.raw + '×' + x.penalty.toFixed(2) + ')</span>' : '';
+    return '<div style="display:flex;gap:6px;align-items:baseline;padding:2px 0;border-bottom:1px solid var(--border-light);">' +
+      '<span style="width:42px;flex:none;color:var(--text-dim);">' + x.cn + '</span>' +
+      '<b style="width:52px;flex:none;color:' + g.color + ';">' + g.letter + ' ' + x.adj + '</b>' +
+      '<span style="flex:1;min-width:0;">' + x.teamCn + ' · ' + x.playerCn +
+      (x.historical ? ' <span style="color:var(--gold);">★</span>' : '') +
+      (x.relaxed ? ' <span style="color:var(--gold);">⚡</span>' : '') +
+      ' <span style="color:var(--text-muted);">(' + x.srcPos + ')</span>' + pen + '</span>' +
+    '</div>';
+  }).join('');
+
+  var head = (info.hit ? '✅ OVR ' + info.ovr + '（已达标 ≥ ' + info.target + '）'
+                       : '⚠️ OVR ' + info.ovr + '（' + info.attempts + ' 次仍未达 ' + info.target + '，已取最高一次）');
+
+  var relaxNote = info.relaxed
+    ? '<div style="font-size:11px;color:var(--gold);margin-bottom:6px;">⚙️ 为冲上目标，部分属性已放宽「跨位置衰减」（下方标 ⚡）</div>'
+    : '';
+
+  var body = '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">' + head + '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">完整随机 ' + info.attempts + ' 次 · 累计刷新球队/球员 ' + info.rerolls + ' 次</div>' +
+    relaxNote +
+    '<div style="font-size:11px;line-height:1.5;">' + rows + '</div>';
+
+  if (typeof showEventModal === 'function') {
+    showEventModal({
+      emoji: '⚡', title: 'Max随机结果', body: body, btnText: '揭晓球员'
+    }, function() {
+      if (typeof revealPlayer === 'function') revealPlayer();
+    });
+  } else {
+    if (typeof revealPlayer === 'function') revealPlayer();
+  }
 }
 
 function pickPlayerAt(drawIndex) {
