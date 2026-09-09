@@ -5111,7 +5111,9 @@ function quickSimAllGames() {
   // 普通「模拟」用 setTimeout 节流；「模拟赛季」(_simFastForward) 由 _ffBatch 同步连打，
   // 不依赖 setTimeout（后台标签页会把 setTimeout 限流到 ~1s，否则会巨慢）。
   function _simStep() {
-    if (window._simFastForward && !window._simPaused) return;
+    // 只有当 _ffBatch 确实在同步驱动时才空转；否则一律回到节流循环（防止残留的
+    // _simFastForward 让 simNextWithDelay 排不上队而卡住）
+    if (window._simFastForward && window._ffRunning && !window._simPaused) return;
     setTimeout(simNextWithDelay, 120);
   }
   function _blockingModal() {
@@ -5119,7 +5121,8 @@ function quickSimAllGames() {
     return !!(m && m.offsetParent !== null);   // 只在真正需要点击的弹窗上让出（联盟面板/说明不算）
   }
   function _ffBatch() {
-    if (!window._simFastForward || window._simPaused) return;
+    if (!window._simFastForward || window._simPaused) { window._ffRunning = false; return; }
+    window._ffRunning = true;
     var start = performance.now();
     while (window._simFastForward && !window._simPaused && gi < games.length) {
       if (_blockingModal()) break;
@@ -5127,11 +5130,13 @@ function quickSimAllGames() {
       if (performance.now() - start > 40) break;   // 每 ~40ms 让线程刷新一次 UI
     }
     if (gi >= games.length) {
+      window._ffRunning = false;
       simNextWithDelay();                 // 触发赛季收尾
     } else if (window._simPaused || !window._simFastForward) {
+      window._ffRunning = false;
       setTimeout(simNextWithDelay, 200);  // 暂停 —— 交回轮询，按「▶ 模拟」可恢复
     } else if (_blockingModal()) {
-      setTimeout(_ffBatch, 300);          // 有需要点击的弹窗，稍后重试 FF
+      setTimeout(_ffBatch, 300);          // 有需要点击的弹窗，稍后重试 FF（_ffRunning 保持 true）
     } else {
       setTimeout(_ffBatch, 0);
     }
@@ -7315,6 +7320,7 @@ function showEndOfSeason() {
       <div class="eos-actions">
         ${actionBtn}
       </div>
+      <button class="btn btn-sm" onclick="showLeagueBrowser()" style="margin-top:8px;background:var(--bg-elevated);border:1.5px solid var(--border);font-size:12px;padding:5px 14px;">🔍 联盟 · 排名 / 数据榜</button>
     </div>
   `;
   // 滚动到顶部
@@ -7719,6 +7725,7 @@ function renderFullBoxScoreHtml(boxScore, tagA, tagB, labelA, labelB) {
 // ==================== 赛季中暂停 + 联盟面板 ====================
 window._simPaused = false;
 window._simFastForward = false;
+window._ffRunning = false;
 
 function simSideControlsHtml() {
   var paused = !!window._simPaused;
@@ -7742,7 +7749,7 @@ function _refreshSimPlayBtn() {
 /** ▶ 模拟 / ⏸ 暂停：随时停下来查看球队 / 排名 / 数据 */
 function toggleSimRun() {
   window._simPaused = !window._simPaused;
-  if (!window._simPaused) window._simFastForward = false;
+  if (!window._simPaused) { window._simFastForward = false; window._ffRunning = false; }
   _refreshSimPlayBtn();
 }
 
@@ -7752,6 +7759,7 @@ function simRunWholeSeason() {
   if (!sched || !sched.find(function(g) { return !g.simulated; })) return;  // 已打完
   window._simFastForward = true;
   window._simPaused = false;
+  window._ffRunning = true;
   _refreshSimPlayBtn();
   var st = document.getElementById('simStatus');
   if (st) st.textContent = '⏭ 模拟赛季中…';
@@ -19520,6 +19528,10 @@ function startNewSeason() {
     STATE._autoSaveSeason = STATE.career.seasonCount;
     autoSaveGame();
   }
+  // 新赛季一律从「暂停」开始，清掉上赛季可能残留的「模拟赛季」快进标记
+  window._simPaused = true;
+  window._simFastForward = false;
+  if (STATE.season && !STATE.season.leaguePlayerStats) STATE.season.leaguePlayerStats = {};
   showScreen('screen-season');
   if (typeof renderSeasonScreenDOM === 'function') renderSeasonScreenDOM();
   if (typeof quickSimAllGames === 'function') {
@@ -19537,7 +19549,7 @@ function resetForNewSeason() {
     playerStats: { pts:0, reb:0, ast:0, stl:0, blk:0, tov:0, fgm:0, fga:0, ftm:0, fta:0, threeM:0, threeA:0, games:0, mins:0 },
     playoffStats: { pts:0, reb:0, ast:0, stl:0, blk:0, tov:0, fgm:0, fga:0, ftm:0, fta:0, threeM:0, threeA:0, games:0, mins:0 },
     awards: [], playoffResult: null, playoffEliminated: false,
-    standings: {}, statLeaders: {}, schedule: [], day: 0,
+    standings: {}, statLeaders: {}, leaguePlayerStats: {}, schedule: [], day: 0,
     isPlayoffs: false, isChampion: false,
     playoffBracket: null, otherBracket: null,
     _viewConf: null, _gamesPlayed: {}, _leagueGameLog: [], rankings: null,
