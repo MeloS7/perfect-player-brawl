@@ -48,9 +48,9 @@ const SIM_CONFIG = {
       ENABLED: true,
 
       /** (1) 实力差 → 每回合效率的系数（原 0.0034，越大强队越carry） */
-      EDGE_COEFF: 0.0092,
+      EDGE_COEFF: 0.0068,
       /** (1) 板凳深度差系数（原 0.00075） */
-      DEPTH_EDGE_COEFF: 0.0020,
+      DEPTH_EDGE_COEFF: 0.0014,
 
       /** (2) 分差 ≤ 此值算“关键球”，按两队关键值差再修正比分 */
       CLUTCH_MARGIN: 5,
@@ -62,9 +62,9 @@ const SIM_CONFIG = {
       USER_IMPACT_MAX_PTS: 4.5,
 
       /** (4) 单队单场得分随机波动（原 6.4 / 4.6 / 10） */
-      SCORE_VARIANCE_BASE: 5.0,
-      SCORE_VARIANCE_MIN: 3.6,
-      SCORE_VARIANCE_MAX: 8.5,
+      SCORE_VARIANCE_BASE: 6.0,
+      SCORE_VARIANCE_MIN: 4.2,
+      SCORE_VARIANCE_MAX: 9.2,
 
       // ---- (5) 压平高能力球员的个人产量（原版曲线太陡：92 OVR 能砍 36 分）----
       /** 球权占比曲线系数（原 0.27，越小顶级球员球权越低） */

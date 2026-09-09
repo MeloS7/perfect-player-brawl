@@ -7718,9 +7718,28 @@ function estimatePlayerLine(p) {
   };
 }
 
+/** 自建球员的联盟条目（不在 NBA2K_DATA 里，面板要手动带上） */
+function _userLeagueEntry() {
+  if (!STATE.careerTeam || !STATE.finalOVR) return null;
+  var line = null;
+  var ps = STATE.season && STATE.season.playerStats;
+  if (ps && ps.games) {
+    var g = ps.games;
+    line = { pts: ps.pts / g, reb: ps.reb / g, ast: ps.ast / g, stl: ps.stl / g, blk: ps.blk / g, real: true };
+  }
+  return {
+    name: getHupuDisplayName(), cname: getHupuDisplayName(),
+    team: STATE.careerTeam, ovr: parseInt(STATE.finalOVR) || 0,
+    pos: (STATE.season && STATE.season._userLineupPos) || STATE.position || 'SF',
+    _age: (STATE.career && STATE.career.currentAge) || 22,
+    _isUser: true, _line: line
+  };
+}
+
 function _leagueBrowserBody(tab) {
   var st = STATE.season && STATE.season.standings ? STATE.season.standings : {};
   function teamStrengthOf(tm) { try { return getFaTeamStrength ? getFaTeamStrength(tm) : 0; } catch (e) { return 0; } }
+  var userEntry = _userLeagueEntry();
 
   if (tab === 'standings') {
     function confTable(list, title) {
@@ -7744,7 +7763,9 @@ function _leagueBrowserBody(tab) {
     var teams = NBA2K_TEAMS.slice().sort(function(a, b) { return teamStrengthOf(b) - teamStrengthOf(a); });
     var h = '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">按球队强度（前 9 人等效 OVR 均值）排序，点球队名展开阵容</div>';
     teams.forEach(function(tm) {
-      var roster = (NBA2K_DATA[tm] || []).slice().sort(function(a, b) { return (parseInt(b.ovr) || 0) - (parseInt(a.ovr) || 0); });
+      var roster = (NBA2K_DATA[tm] || []).slice();
+      if (userEntry && tm === STATE.careerTeam) roster = [userEntry].concat(roster);
+      roster.sort(function(a, b) { return (parseInt(b.ovr) || 0) - (parseInt(a.ovr) || 0); });
       var strong = teamStrengthOf(tm);
       h += '<details style="border:1px solid var(--border);border-radius:8px;margin:4px 0;padding:2px 6px;">' +
         '<summary style="cursor:pointer;font-size:12px;font-weight:700;padding:4px 0;">' +
@@ -7772,15 +7793,24 @@ function _leagueBrowserBody(tab) {
       all.push({ name: p.cname || p.name, team: tm, ovr: parseInt(p.ovr) || 0, isU: !!p._isUser || (p.name === getHupuDisplayName()), real: line.real, pts: line.pts, reb: line.reb, ast: line.ast });
     });
   });
+  if (userEntry) {
+    var uline = userEntry._line || estimatePlayerLine({ ovr: userEntry.ovr, pos: userEntry.pos });
+    all.push({ name: userEntry.name, team: userEntry.team, ovr: userEntry.ovr, isU: true, real: !!userEntry._line, pts: uline.pts, reb: uline.reb, ast: uline.ast });
+  }
   function board(key, label) {
-    var top = all.slice().sort(function(a, b) { return b[key] - a[key]; }).slice(0, 15);
+    var sorted = all.slice().sort(function(a, b) { return b[key] - a[key]; });
     var h = '<div style="font-family:var(--font-display);font-size:12px;color:var(--orange);margin:8px 0 3px;">' + label + '</div>';
-    top.forEach(function(r, i) {
-      h += '<div style="display:flex;gap:4px;font-size:10px;padding:2px 2px;border-bottom:1px solid var(--border-light);' + (r.isU ? 'background:var(--orange-dim);border-radius:4px;color:var(--orange);font-weight:700;' : '') + '">' +
-        '<span style="width:16px;color:var(--text-muted);">' + (i + 1) + '</span>' +
+    function row(r, rank) {
+      return '<div style="display:flex;gap:4px;font-size:10px;padding:2px 2px;border-bottom:1px solid var(--border-light);' + (r.isU ? 'background:var(--orange-dim);border-radius:4px;color:var(--orange);font-weight:700;' : '') + '">' +
+        '<span style="width:16px;color:var(--text-muted);">' + rank + '</span>' +
         '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.name + ' <span style="color:var(--text-dim);font-weight:400;">' + getTeamName(r.team) + '</span></span>' +
         '<span style="width:34px;text-align:right;font-weight:700;">' + r[key].toFixed(1) + '</span></div>';
-    });
+    }
+    sorted.slice(0, 15).forEach(function(r, i) { h += row(r, i + 1); });
+    var uIdx = sorted.findIndex(function(r) { return r.isU; });
+    if (uIdx >= 15) {
+      h += '<div style="text-align:center;color:var(--text-muted);font-size:9px;">···</div>' + row(sorted[uIdx], uIdx + 1);
+    }
     return h;
   }
   return '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">⚠️ 联盟不逐场累计非用户数据，下列为按能力推算的赛季场均（你的数据为真实值）</div>' +
@@ -8807,9 +8837,9 @@ function renderPlayoffGameBrief(gameEntry, teamA, teamB, isMySeries, roundName, 
   brief.onclick = () => showPlayoffGamePopup(round, seriesIdx, gameEntry.game - 1);
   
   gcContainer.prepend(brief);
-  
-  // 最多保留5条简报
-  while (gcContainer.children.length > 5) {
+
+  // 保留整轮全部简报（7 场都能回看 box score）
+  while (gcContainer.children.length > 40) {
     gcContainer.removeChild(gcContainer.lastChild);
   }
 }
@@ -8818,6 +8848,27 @@ function renderPlayoffGameBrief(gameEntry, teamA, teamB, isMySeries, roundName, 
 function clearPlayoffGamecast() {
   const gc = document.getElementById('playoff-gamecast');
   if (gc) { gc.innerHTML = ''; gc.style.display = 'none'; }
+}
+
+/** 系列赛结束后，把整轮的比赛简报（可点开看完整 box score）重新铺回 gamecast，
+ *  不自动跳转 —— 用户看完后自己在对阵图点「开始下一轮」。 */
+function renderSeriesRecapFromResult(result) {
+  if (!result) return;
+  var gc = document.getElementById('playoff-gamecast');
+  if (!gc) return;
+  gc.innerHTML = '';
+  gc.style.display = 'block';
+  var userWon = result.isMySeries && (result.teamA === STATE.careerTeam ? result.aWon : !result.aWon);
+  var head = document.createElement('div');
+  head.style.cssText = 'padding:8px 0 6px;font-family:var(--font-display);font-size:12px;color:var(--orange);text-align:center;';
+  head.innerHTML = '📋 ' + result.roundName + ' 已打完 · ' +
+    getTeamName(result.teamA) + ' ' + result.winsA + '–' + result.winsB + ' ' + getTeamName(result.teamB) +
+    '<div style="font-size:10px;color:var(--text-dim);font-weight:400;margin-top:2px;">点每场查看全场技术统计' +
+    (userWon ? ' · 看完后在上方对阵图点「▶ 开始下一轮」' : ' · 可在上方点「📊 查看赛季总结」') + '</div>';
+  gc.appendChild(head);
+  (result.seriesGames || []).forEach(function(ge, i) {
+    renderPlayoffGameBrief(ge, result.teamA, result.teamB, result.isMySeries, result.roundName, i + 1, (result.seriesGames || []).length, result.round, result.seriesIdx);
+  });
 }
 
 /** 单场模拟并更新简报（递归，一场一场模拟） */
@@ -9154,13 +9205,13 @@ function simPlayoffSeries(round, seriesIdx) {
         }
       }
       if (!userWonSeries) {
-        clearPlayoffGamecast();
         renderPlayoffBracketUI();
+        renderSeriesRecapFromResult(result);   // 保留本轮所有比赛简报供回看
         showSeriesResult(result);
         return;
       }
-      clearPlayoffGamecast();
       renderPlayoffBracketUI();
+      renderSeriesRecapFromResult(result);     // 不自动跳，用户看完后自己点下一轮
       return;
     }
     
