@@ -5041,6 +5041,7 @@ function startSeason() {
     playoffEliminated: false,
     standings: {},     // { team: { wins, losses, streak } }
     statLeaders: {},   // { pts: { name, val }, reb: {...}, ast: {...} }
+    leaguePlayerStats: {},  // 大乱斗：全联盟每名球员的赛季累计 { name: {cname, team, ovr, games, pts, ...} }
     schedule: [],
     day: 0,
     isPlayoffs: false,
@@ -5053,6 +5054,10 @@ function startSeason() {
     events: { suspensionGamesLeft: 0, suspensionReason: '', injuryGamesLeft: 0, injuryReason: '', triggeredIds: [], storyTimeline: [], lastTriggerGameNum: null, playoffEventCount: 0, injuryRiskBonus: getNextSeasonMods().injuryRiskBonus || 0, majorInjuryThisSeason: false, playThroughPrompted: {}, regularPlayThroughPromptCount: 0 },
   };
   
+  // 进入赛季页时先暂停：由「▶ 模拟」/「⏭ 模拟赛季」按钮控制推进（要在渲染按钮前设好）
+  window._simPaused = true;
+  window._simFastForward = false;
+
   initStandings();
   buildRealSchedule();
   // ★ 直接渲染赛季页，加载动画放在 dot-grid 内部
@@ -5103,12 +5108,41 @@ function quickSimAllGames() {
   html('simStatus').innerHTML = '模拟中 0/' + games.length;
 
   var gi = 0;
+  // 普通「模拟」用 setTimeout 节流；「模拟赛季」(_simFastForward) 由 _ffBatch 同步连打，
+  // 不依赖 setTimeout（后台标签页会把 setTimeout 限流到 ~1s，否则会巨慢）。
+  function _simStep() {
+    if (window._simFastForward && !window._simPaused) return;
+    setTimeout(simNextWithDelay, 120);
+  }
+  function _blockingModal() {
+    var m = document.querySelector('#eventOverlay, .awards-overlay, .play-through-injury-modal');
+    return !!(m && m.offsetParent !== null);   // 只在真正需要点击的弹窗上让出（联盟面板/说明不算）
+  }
+  function _ffBatch() {
+    if (!window._simFastForward || window._simPaused) return;
+    var start = performance.now();
+    while (window._simFastForward && !window._simPaused && gi < games.length) {
+      if (_blockingModal()) break;
+      simNextWithDelay();                 // FF 分支下 _simStep() 直接 return，不会再排队
+      if (performance.now() - start > 40) break;   // 每 ~40ms 让线程刷新一次 UI
+    }
+    if (gi >= games.length) {
+      simNextWithDelay();                 // 触发赛季收尾
+    } else if (window._simPaused || !window._simFastForward) {
+      setTimeout(simNextWithDelay, 200);  // 暂停 —— 交回轮询，按「▶ 模拟」可恢复
+    } else if (_blockingModal()) {
+      setTimeout(_ffBatch, 300);          // 有需要点击的弹窗，稍后重试 FF
+    } else {
+      setTimeout(_ffBatch, 0);
+    }
+  }
+  window._runFfBatch = _ffBatch;
   function simNextWithDelay() {
     // 赛季中暂停：轮询等待，其间可打开「联盟」面板查看排名 / 阵容 / 数据
     if (window._simPaused && gi < games.length) {
       var _ps = document.getElementById('simStatus');
-      if (_ps) _ps.textContent = '⏸ 已暂停 ' + gi + '/' + games.length + ' · 点「▶ 继续」恢复';
-      setTimeout(simNextWithDelay, 250);
+      if (_ps) _ps.textContent = gi === 0 ? '点「▶ 模拟」开始，或「⏭ 模拟赛季」一次打完' : ('⏸ 已暂停 ' + gi + '/' + games.length + ' · 点「▶ 模拟」继续');
+      setTimeout(simNextWithDelay, 200);
       return;
     }
     if (gi >= games.length) {
@@ -5269,7 +5303,7 @@ function quickSimAllGames() {
           var esEl = document.getElementById('eventStatusBar');
           if (esEl) esEl.outerHTML = renderEventStatus();
           gi++;
-          setTimeout(simNextWithDelay, 120);
+          _simStep();
         };
         var runPlayedThroughRegularGame = function(severity) {
           ev.injuryGamesLeft = Math.max(0, (ev.injuryGamesLeft || 0) - 1);
@@ -5312,9 +5346,9 @@ function quickSimAllGames() {
           var esH = document.getElementById('eventStatusBar');
           if (esH) esH.outerHTML = renderEventStatus();
           gi++;
-          setTimeout(simNextWithDelay, 120);
+          _simStep();
         };
-        if (skipReason === 'injury' && isKeyInjuredRegularGame(g, gi, games.length) && shouldOfferPlayThroughInjury('reg-' + (STATE.season.games.length + 1), true)) {
+        if (!window._simFastForward && skipReason === 'injury' && isKeyInjuredRegularGame(g, gi, games.length) && shouldOfferPlayThroughInjury('reg-' + (STATE.season.games.length + 1), true)) {
           showPlayThroughInjuryModal({
             desc: '赛季已经进入最后阶段，' + getTeamName(STATE.careerTeam) + ' 正卡在排名边缘，下一场对阵 ' + getTeamName(g.opponent) + ' 的结果可能改变季后赛位置。'
           }, runSkippedRegularGame, runPlayedThroughRegularGame);
@@ -5348,6 +5382,9 @@ function quickSimAllGames() {
       ps.games++;
 
       STATE.season.games.push({ result: result, stats: stats, game: g });
+      if (SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED && SIM_CONFIG.BRAWL.SIM && SIM_CONFIG.BRAWL.SIM.LEAGUE_STATS !== false) {
+        accumulateLeaguePlayerStats(result.boxScore);  // 也把我方对手/队友的这场数据计入联盟统计（用户自己那行会跳过）
+      }
       simDayLeagueGames(g.day);
 
       // ★ 赛后检测随机事件
@@ -5397,15 +5434,17 @@ function quickSimAllGames() {
 
       gi++;
 
-      // ★ 如果有事件弹窗，先弹窗再继续
-      if (evData && typeof showEventModal === 'function') {
+      // ★ 如果有事件弹窗，先弹窗再继续（模拟赛季 fast-forward 时跳过弹窗，后果已在检测时应用）
+      if (window._simFastForward) {
+        _simStep();
+      } else if (evData && typeof showEventModal === 'function') {
         showEventModal(evData, function() { setTimeout(simNextWithDelay, 120); });
       } else if (branchEv) {
         showSeasonBranchEvent(branchEv, function() { setTimeout(simNextWithDelay, 120); });
       } else {
-        setTimeout(simNextWithDelay, 120);
+        _simStep();
       }
-    } catch(e) { console.error('[Sim] 第' + (gi + 1) + '场异常:', e); gi++; setTimeout(simNextWithDelay, 120); }
+    } catch(e) { console.error('[Sim] 第' + (gi + 1) + '场异常:', e); gi++; _simStep(); }
   }
 
   simNextWithDelay();
@@ -6270,11 +6309,13 @@ function simDayLeagueGames(day) {
     const games = dayMap[d];
     if (!games) return;
     
+    var _lgStats = !!(SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED && SIM_CONFIG.BRAWL.SIM && SIM_CONFIG.BRAWL.SIM.LEAGUE_STATS !== false);
     games.forEach(g => {
       // 跳过包含我方球队的比赛（这些已经通过我们的比赛模拟过了）
       if (g.home === STATE.careerTeam || g.away === STATE.careerTeam) return;
-      
-      const leagueResult = simulate82StyleMatchup(g.home, g.away, { teamAHome: true, includeBoxScore: false, leagueGame: true });
+
+      const leagueResult = simulate82StyleMatchup(g.home, g.away, { teamAHome: true, includeBoxScore: _lgStats, leagueGame: true });
+      if (_lgStats) accumulateLeaguePlayerStats(leagueResult.boxScore);
       if (leagueResult.won) {
         standings[g.home].wins++; standings[g.away].losses++;
         updateStreak(g.home, true); updateStreak(g.away, false);
@@ -6754,7 +6795,9 @@ function generateBoxScore(teamA, teamB, totalA, totalB) {
 
     const scoringWeights = profiles.map(function(profile) {
       var form = Math.max(0.78, Math.min(1.22, simGaussian(1, 0.09)));
-      return profile.mins * (0.22 + Math.pow(simSkill01(profile.creation), 1.35) * 1.45) * form;
+      // 大乱斗：得分略微向球星集中
+      var _bx = (SIM_CONFIG.BRAWL && SIM_CONFIG.BRAWL.ENABLED && SIM_CONFIG.BRAWL.SIM && SIM_CONFIG.BRAWL.SIM.ENABLED !== false);
+      return profile.mins * ((_bx ? 0.18 : 0.22) + Math.pow(simSkill01(profile.creation), 1.35) * (_bx ? 1.9 : 1.45)) * form;
     });
     const points = allocateIntegerTotal(totalPts, scoringWeights);
     function minuteAverage(attr) {
@@ -7675,27 +7718,44 @@ function renderFullBoxScoreHtml(boxScore, tagA, tagB, labelA, labelB) {
 
 // ==================== 赛季中暂停 + 联盟面板 ====================
 window._simPaused = false;
+window._simFastForward = false;
 
 function simSideControlsHtml() {
   var paused = !!window._simPaused;
-  return '<div id="simSideControls" style="display:flex;gap:6px;justify-content:center;padding:6px 0 2px;">' +
-    '<button class="btn btn-sm" id="simPauseBtn" onclick="toggleSimPause()" style="background:' + (paused ? 'var(--green)' : 'var(--bg-elevated)') + ';border:1.5px solid var(--border);font-size:12px;padding:5px 12px;">' +
-      (paused ? '▶ 继续' : '⏸ 暂停') + '</button>' +
+  return '<div id="simSideControls" style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;padding:6px 0 2px;">' +
+    '<button class="btn btn-sm" id="simPlayBtn" onclick="toggleSimRun()" style="background:' + (paused ? 'var(--orange)' : 'var(--bg-elevated)') + ';color:' + (paused ? '#fff' : 'var(--text)') + ';border:1.5px solid var(--border);font-size:12px;padding:5px 16px;font-weight:700;">' +
+      (paused ? '▶ 模拟' : '⏸ 暂停') + '</button>' +
+    '<button class="btn btn-sm" id="simRunAllBtn" onclick="simRunWholeSeason()" style="background:var(--bg-elevated);border:1.5px solid var(--border);font-size:12px;padding:5px 12px;">⏭ 模拟赛季</button>' +
     '<button class="btn btn-sm" onclick="showLeagueBrowser()" style="background:var(--bg-elevated);border:1.5px solid var(--border);font-size:12px;padding:5px 12px;">🔍 联盟</button>' +
   '</div>';
 }
 
-function toggleSimPause() {
+function _refreshSimPlayBtn() {
+  var b = document.getElementById('simPlayBtn');
+  if (!b) return;
+  var paused = !!window._simPaused;
+  b.textContent = paused ? '▶ 模拟' : '⏸ 暂停';
+  b.style.background = paused ? 'var(--orange)' : 'var(--bg-elevated)';
+  b.style.color = paused ? '#fff' : 'var(--text)';
+}
+
+/** ▶ 模拟 / ⏸ 暂停：随时停下来查看球队 / 排名 / 数据 */
+function toggleSimRun() {
   window._simPaused = !window._simPaused;
-  var b = document.getElementById('simPauseBtn');
-  if (b) {
-    b.textContent = window._simPaused ? '▶ 继续' : '⏸ 暂停';
-    b.style.background = window._simPaused ? 'var(--green)' : 'var(--bg-elevated)';
-  }
-  if (!window._simPaused) {
-    var st = document.getElementById('simStatus');
-    if (st && /暂停/.test(st.textContent)) st.textContent = '继续模拟…';
-  }
+  if (!window._simPaused) window._simFastForward = false;
+  _refreshSimPlayBtn();
+}
+
+/** ⏭ 模拟赛季：不停顿、跳过弹窗，一次打完整个常规赛 */
+function simRunWholeSeason() {
+  var sched = STATE.season && STATE.season.schedule;
+  if (!sched || !sched.find(function(g) { return !g.simulated; })) return;  // 已打完
+  window._simFastForward = true;
+  window._simPaused = false;
+  _refreshSimPlayBtn();
+  var st = document.getElementById('simStatus');
+  if (st) st.textContent = '⏭ 模拟赛季中…';
+  if (typeof window._runFfBatch === 'function') window._runFfBatch();
 }
 
 /** 按能力推算某球员的赛季场均（联盟不逐场累计非用户数据，这里按 OVR + 位置估算） */
@@ -7716,6 +7776,29 @@ function estimatePlayerLine(p) {
     blk: (pos === 'C' ? 1.4 : pos === 'PF' ? 1.0 : 0.4) * (0.6 + t),
     real: false
   };
+}
+
+/** 大乱斗：把一场比赛的 box score 累进全联盟球员赛季统计（用户自己那行跳过，另在 playerStats 里算） */
+function accumulateLeaguePlayerStats(boxScore) {
+  if (!boxScore) return;
+  var store = STATE.season && STATE.season.leaguePlayerStats;
+  if (!store) return;
+  Object.keys(boxScore).forEach(function(teamTag) {
+    (boxScore[teamTag] || []).forEach(function(row) {
+      if (!row || row.isUser) return;
+      var key = row.name || '?';
+      var s = store[key];
+      if (!s) s = store[key] = { name: row.name || '?', team: teamTag, games: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, threeM: 0, threeA: 0, ftm: 0, fta: 0, mins: 0 };
+      s.games++;
+      s.pts += row.pts || 0; s.reb += row.reb || 0; s.ast += row.ast || 0;
+      s.stl += row.stl || 0; s.blk += row.blk || 0; s.tov += row.tov || 0;
+      s.fgm += row.fgm || 0; s.fga += row.fga || 0;
+      s.threeM += row.threeM || 0; s.threeA += row.threeA || 0;
+      s.ftm += row.ftm || 0; s.fta += row.fta || 0;
+      s.mins += row.mins || 0;
+      s.team = teamTag;
+    });
+  });
 }
 
 /** 自建球员的联盟条目（不在 NBA2K_DATA 里，面板要手动带上） */
@@ -7785,14 +7868,28 @@ function _leagueBrowserBody(tab) {
   }
 
   // leaders
+  var lps = (STATE.season && STATE.season.leaguePlayerStats) || {};
+  var lpsKeys = Object.keys(lps);
+  var _maxG = 0; lpsKeys.forEach(function(k) { if (lps[k].games > _maxG) _maxG = lps[k].games; });
+  var useReal = _maxG >= 10;   // 联盟已打了 10+ 场 → 用真实累计
+  var _minG = Math.max(5, Math.round(_maxG * 0.4));
   var all = [];
-  NBA2K_TEAMS.forEach(function(tm) {
-    (NBA2K_DATA[tm] || []).forEach(function(p) {
-      if ((parseInt(p.ovr) || 0) < 74 && !p._isUser) return;
-      var line = estimatePlayerLine(p);
-      all.push({ name: p.cname || p.name, team: tm, ovr: parseInt(p.ovr) || 0, isU: !!p._isUser || (p.name === getHupuDisplayName()), real: line.real, pts: line.pts, reb: line.reb, ast: line.ast });
+  if (useReal) {
+    lpsKeys.forEach(function(k) {
+      var s = lps[k];
+      if (!s || s.games < _minG) return;
+      all.push({ name: s.name, team: s.team, isU: false, real: true,
+        pts: s.pts / s.games, reb: s.reb / s.games, ast: s.ast / s.games });
     });
-  });
+  } else {
+    NBA2K_TEAMS.forEach(function(tm) {
+      (NBA2K_DATA[tm] || []).forEach(function(p) {
+        if ((parseInt(p.ovr) || 0) < 74 && !p._isUser) return;
+        var line = estimatePlayerLine(p);
+        all.push({ name: p.cname || p.name, team: tm, ovr: parseInt(p.ovr) || 0, isU: !!p._isUser || (p.name === getHupuDisplayName()), real: line.real, pts: line.pts, reb: line.reb, ast: line.ast });
+      });
+    });
+  }
   if (userEntry) {
     var uline = userEntry._line || estimatePlayerLine({ ovr: userEntry.ovr, pos: userEntry.pos });
     all.push({ name: userEntry.name, team: userEntry.team, ovr: userEntry.ovr, isU: true, real: !!userEntry._line, pts: uline.pts, reb: uline.reb, ast: uline.ast });
@@ -7813,7 +7910,8 @@ function _leagueBrowserBody(tab) {
     }
     return h;
   }
-  return '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">⚠️ 联盟不逐场累计非用户数据，下列为按能力推算的赛季场均（你的数据为真实值）</div>' +
+  return '<div style="font-size:10px;color:var(--text-dim);margin:6px 0;">' +
+    (useReal ? '📊 全联盟赛季真实累计场均（每场逐一模拟）' : '⚠️ 赛季刚开始，下列为按能力推算的场均；打几场后会切换成真实数据') + '</div>' +
     board('pts', '得分榜') + board('reb', '篮板榜') + board('ast', '助攻榜');
 }
 
